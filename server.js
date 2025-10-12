@@ -107,6 +107,10 @@ app.get('/health', (req, res) => {
   res.status(200).json(healthData);
 });
 
+app.get('/', (req, res) => {
+  res.status(200).json({ message: 'Welcome to SmartXAlgo CRM API' });
+});
+
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
