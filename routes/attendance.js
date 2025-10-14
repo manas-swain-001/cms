@@ -384,14 +384,14 @@ router.get('/today', auth, async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const attendance = Attendance.findOne({
+    const attendance = await Attendance.findOne({
       userId,
       date: today
     });
     
     // Get user details if attendance exists
     if (attendance) {
-      const user = User.findById(userId);
+      const user = await User.findById(userId);
       if (user) {
         attendance.userId = {
           _id: user._id,
@@ -419,15 +419,15 @@ router.get('/today', auth, async (req, res) => {
     let currentStatus = 'not_punched_in';
     let ongoingBreak = null;
     
-    if (attendance.punchIn && !attendance.punchOut) {
-      const activeBreak = attendance.breaks.find(b => b.startTime && !b.endTime);
+    if (attendance.checkIn && !attendance.checkOut?.time) {
+      const activeBreak = attendance.breaks?.find(b => b.startTime && !b.endTime);
       if (activeBreak) {
         currentStatus = 'on_break';
         ongoingBreak = activeBreak;
       } else {
         currentStatus = 'working';
       }
-    } else if (attendance.punchIn && attendance.punchOut) {
+    } else if (attendance.checkIn && attendance.checkOut) {
       currentStatus = 'punched_out';
     }
 
