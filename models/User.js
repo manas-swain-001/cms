@@ -30,7 +30,7 @@ const userSchema = new mongoose.Schema({
     minlength: [6, 'Password must be at least 6 characters'],
     select: false
   },
-  
+
   // Role and Permissions
   role: {
     type: String,
@@ -39,9 +39,10 @@ const userSchema = new mongoose.Schema({
   },
   permissions: [{
     type: String,
-    enum: Object.values(PERMISSIONS)
+    enum: Object.values(PERMISSIONS),
+    default: []
   }],
-  
+
   // Office and Location
   office: {
     type: String,
@@ -56,7 +57,7 @@ const userSchema = new mongoose.Schema({
     type: String,
     sparse: true
   },
-  
+
   // Contact Information
   phone: {
     type: String,
@@ -70,7 +71,7 @@ const userSchema = new mongoose.Schema({
     country: String,
     zipCode: String
   },
-  
+
   // Profile Information
   avatar: {
     type: String,
@@ -83,7 +84,7 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
-  
+
   // Biometric Data
   biometricData: {
     faceEncoding: {
@@ -103,7 +104,7 @@ const userSchema = new mongoose.Schema({
       default: null
     }
   },
-  
+
   // Preferences
   preferences: {
     theme: {
@@ -134,7 +135,7 @@ const userSchema = new mongoose.Schema({
       default: 'Asia/Kolkata'
     }
   },
-  
+
   // Work Schedule
   workSchedule: {
     shiftType: {
@@ -158,7 +159,7 @@ const userSchema = new mongoose.Schema({
       default: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']
     }]
   },
-  
+
   // Account Status
   isActive: {
     type: Boolean,
@@ -178,7 +179,7 @@ const userSchema = new mongoose.Schema({
   lockUntil: {
     type: Date
   },
-  
+
   // Refresh Tokens
   refreshTokens: [{
     token: String,
@@ -187,11 +188,11 @@ const userSchema = new mongoose.Schema({
       default: Date.now
     }
   }],
-  
+
   // Password Reset
   passwordResetToken: String,
   passwordResetExpires: Date,
-  
+
   // Email Verification
   emailVerificationToken: String,
   emailVerificationExpires: Date
@@ -202,12 +203,12 @@ const userSchema = new mongoose.Schema({
 });
 
 // Virtual for full name
-userSchema.virtual('fullName').get(function() {
+userSchema.virtual('fullName').get(function () {
   return `${this.firstName} ${this.lastName}`;
 });
 
 // Virtual for account locked status
-userSchema.virtual('isLocked').get(function() {
+userSchema.virtual('isLocked').get(function () {
   return !!(this.lockUntil && this.lockUntil > Date.now());
 });
 
@@ -218,10 +219,10 @@ userSchema.index({ office: 1 });
 userSchema.index({ role: 1 });
 
 // Pre-save middleware to hash password
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   // Only hash the password if it has been modified (or is new)
   if (!this.isModified('password')) return next();
-  
+
   try {
     // Hash password with cost of 12
     const saltRounds = parseInt(process.env.BCRYPT_SALT_ROUNDS) || 12;
@@ -233,7 +234,7 @@ userSchema.pre('save', async function(next) {
 });
 
 // Pre-save middleware to generate employee ID
-userSchema.pre('save', async function(next) {
+/* userSchema.pre('save', async function(next) {
   if (this.isNew && !this.employeeId) {
     try {
       const count = await this.constructor.countDocuments({ office: this.office });
@@ -246,89 +247,105 @@ userSchema.pre('save', async function(next) {
   } else {
     next();
   }
+}); */
+
+userSchema.pre('save', async function (next) {
+  if (this.isNew && !this.employeeId) {
+    try {
+      const count = await this.constructor.countDocuments();
+      const prefix = 'SMARTX-';
+      this.employeeId = `${prefix}${String(count + 1).padStart(4, '0')}`;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  } else {
+    next();
+  }
 });
 
+
 // Instance method to compare password
-userSchema.methods.comparePassword = async function(candidatePassword) {
+userSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
 // Instance method to generate JWT token
-userSchema.methods.generateAuthToken = function() {
+userSchema.methods.generateAuthToken = function () {
   const payload = {
     id: this._id,
     email: this.email,
     role: this.role,
     office: this.office
   };
-  
+
   return jwt.sign(payload, process.env.JWT_SECRET || 'fallback-secret', {
     expiresIn: process.env.JWT_EXPIRE || '7d'
   });
 };
 
 // Instance method to generate refresh token
-userSchema.methods.generateRefreshToken = function() {
+userSchema.methods.generateRefreshToken = function () {
   const payload = {
     id: this._id,
     type: 'refresh'
   };
-  
+
   return jwt.sign(payload, process.env.JWT_REFRESH_SECRET || 'fallback-refresh-secret', {
     expiresIn: process.env.JWT_REFRESH_EXPIRE || '30d'
   });
 };
 
 // Instance method to increment login attempts
-userSchema.methods.incLoginAttempts = function() {
+userSchema.methods.incLoginAttempts = function () {
   if (this.lockUntil && this.lockUntil < Date.now()) {
     this.lockUntil = null;
     this.loginAttempts = 1;
   } else {
     this.loginAttempts += 1;
-    
+
     if (this.loginAttempts >= 5 && !this.isLocked) {
       this.lockUntil = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2 hours
     }
   }
-  
+
   return this.save();
 };
 
 // Instance method to reset login attempts
-userSchema.methods.resetLoginAttempts = function() {
+userSchema.methods.resetLoginAttempts = function () {
   this.loginAttempts = 0;
   this.lockUntil = null;
   return this.save();
 };
 
 // Static method to find user by credentials
-userSchema.statics.findByCredentials = async function(email, password) {
+userSchema.statics.findByCredentials = async function (email, password) {
   const user = await this.findOne({ email, isActive: true }).select('+password');
-  
+
   if (!user) {
     throw new Error('Invalid credentials');
   }
-  
+
   if (user.isLocked) {
     throw new Error('Account is temporarily locked due to too many failed login attempts');
   }
-  
+
   const isMatch = await user.comparePassword(password);
-  
+
   if (!isMatch) {
     await user.incLoginAttempts();
     throw new Error('Invalid credentials');
   }
-  
+
   if (user.loginAttempts > 0) {
     await user.resetLoginAttempts();
   }
-  
+
   // Update last login
   user.lastLogin = new Date();
   await user.save();
-  
+
   return user;
 };
 
