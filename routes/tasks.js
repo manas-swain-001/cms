@@ -3,6 +3,7 @@ const { body, validationResult, query } = require('express-validator');
 const { Task, clearTaskStorage } = require('../models/Task');
 const { User } = require('../models/User');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
+const { USER_ROLES } = require('../constant/enum');
 
 const router = express.Router();
 
@@ -358,7 +359,7 @@ router.get('/history', [
 // @access  Private (Manager/Admin)
 router.get('/team', [
   auth,
-  authorize('admin', 'manager'),
+  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
   query('date').optional().isISO8601().withMessage('Date must be a valid date')
 ], async (req, res) => {
   try {
@@ -377,7 +378,7 @@ router.get('/team', [
 
     // Build filter based on user role
     const userFilter = {};
-    if (req.user.role === 'manager') {
+    if (req.user.role === USER_ROLES.MANAGER) {
       userFilter.office = req.user.office;
       userFilter.department = req.user.department;
     }
@@ -464,7 +465,7 @@ router.get('/team', [
 // @access  Private (Manager/Admin)
 router.get('/reports/compliance', [
   auth,
-  authorize('admin', 'manager'),
+  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
   query('startDate').isISO8601().withMessage('Start date is required and must be valid'),
   query('endDate').isISO8601().withMessage('End date is required and must be valid'),
   query('userId').optional().isMongoId().withMessage('Invalid user ID')
@@ -490,7 +491,7 @@ router.get('/reports/compliance', [
     };
 
     // Role-based filtering
-    if (req.user.role === 'manager') {
+    if (req.user.role === USER_ROLES.MANAGER) {
       const teamMembers = User.find({
         office: req.user.office,
         department: req.user.department,
@@ -528,7 +529,7 @@ router.get('/reports/compliance', [
 // @access  Private (Manager/Admin)
 router.put('/:id/review', [
   auth,
-  authorize('admin', 'manager'),
+  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
   body('status')
     .isIn(['approved', 'rejected', 'needs_revision'])
     .withMessage('Invalid review status'),
@@ -576,7 +577,7 @@ router.put('/:id/review', [
     }
 
     // Check if manager can review this task
-    if (req.user.role === 'manager') {
+    if (req.user.role === USER_ROLES.MANAGER) {
       if (task.userId.office !== req.user.office || 
           task.userId.department !== req.user.department) {
         return res.status(403).json({
@@ -622,7 +623,7 @@ router.put('/:id/review', [
 // @access  Private (Manager/Admin)
 router.get('/analytics/trends', [
   auth,
-  authorize('admin', 'manager'),
+  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
   query('period')
     .isIn(['week', 'month', 'quarter'])
     .withMessage('Period must be week, month, or quarter'),
@@ -665,7 +666,7 @@ router.get('/analytics/trends', [
     };
 
     // Role-based filtering
-    if (req.user.role === 'manager') {
+    if (req.user.role === USER_ROLES.MANAGER) {
       const teamMembers = User.find({
         office: req.user.office,
         department: req.user.department,

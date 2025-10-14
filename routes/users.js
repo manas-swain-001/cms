@@ -3,6 +3,7 @@ const { body, validationResult, query } = require('express-validator');
 const { User } = require('../models/User');
 const { auth, authorize, checkPermission, selfOrAdmin, managerAccess, auditLog } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { USER_ROLES } = require('../constant/enum');
 
 const router = express.Router();
 
@@ -11,10 +12,10 @@ const router = express.Router();
 // @access  Private (Admin/Manager)
 router.get('/', [
   auth,
-  authorize('admin', 'manager'),
+  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
   query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
-  query('role').optional().isIn(['admin', 'manager', 'developer', 'sales', 'field']).withMessage('Invalid role'),
+  query('role').optional().isIn(Object.values(USER_ROLES)).withMessage('Invalid role'),
   query('office').optional().isIn(['bhubaneswar', 'mumbai', 'bangalore', 'delhi']).withMessage('Invalid office'),
   query('isActive').optional().isBoolean().withMessage('isActive must be boolean')
 ], async (req, res) => {
@@ -44,14 +45,14 @@ router.get('/', [
     const filter = {};
     
     // Role-based filtering
-    if (req.user.role === 'manager') {
+    if (req.user.role === USER_ROLES.MANAGER) {
       // Managers can only see users from their office and department
       filter.office = req.user.office;
       filter.department = req.user.department;
     }
     
     if (role) filter.role = role;
-    if (office && req.user.role === 'admin') filter.office = office;
+    if (office && req.user.role === USER_ROLES.ADMIN) filter.office = office;
     if (department) filter.department = department;
     if (isActive !== undefined) filter.isActive = isActive === 'true';
     
@@ -176,7 +177,7 @@ router.put('/:id', [
   body('firstName').optional().trim().isLength({ min: 2, max: 50 }).withMessage('First name must be between 2 and 50 characters'),
   body('lastName').optional().trim().isLength({ min: 2, max: 50 }).withMessage('Last name must be between 2 and 50 characters'),
   body('phone').optional().isMobilePhone().withMessage('Please provide a valid phone number'),
-  body('role').optional().isIn(['admin', 'manager', 'developer', 'sales', 'field']).withMessage('Invalid role'),
+  body('role').optional().isIn(Object.values(USER_ROLES)).withMessage('Invalid role'),
   body('office').optional().isIn(['bhubaneswar', 'mumbai', 'bangalore', 'delhi']).withMessage('Invalid office'),
   auditLog('UPDATE_USER')
 ], async (req, res) => {
@@ -201,7 +202,7 @@ router.put('/:id', [
     delete updates.accountLocked;
     
     // Only admin can update role and certain fields
-    if (req.user.role !== 'admin') {
+    if (req.user.role !== USER_ROLES.ADMIN) {
       delete updates.role;
       delete updates.permissions;
       delete updates.isActive;
@@ -209,7 +210,7 @@ router.put('/:id', [
     }
     
     // Users can only update their own profile (except admin)
-    if (req.user.role !== 'admin' && req.user._id.toString() !== userId) {
+    if (req.user.role !== USER_ROLES.ADMIN && req.user._id.toString() !== userId) {
       return res.status(403).json({
         success: false,
         message: 'You can only update your own profile'
@@ -266,7 +267,7 @@ router.put('/:id', [
 // @access  Private (Admin only)
 router.delete('/:id', [
   auth,
-  authorize('admin'),
+  authorize(USER_ROLES.ADMIN),
   auditLog('DELETE_USER')
 ], async (req, res) => {
   try {
@@ -452,12 +453,12 @@ router.post('/:id/enroll-biometric', [
 // @route   GET /api/users/stats/overview
 // @desc    Get user statistics overview
 // @access  Private (Admin/Manager)
-router.get('/stats/overview', [auth, authorize('admin', 'manager')], async (req, res) => {
+router.get('/stats/overview', [auth, authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER)], async (req, res) => {
   try {
     const filter = {};
     
     // Managers can only see stats from their office
-    if (req.user.role === 'manager') {
+    if (req.user.role === USER_ROLES.MANAGER) {
       filter.office = req.user.office;
     }
 
@@ -503,7 +504,7 @@ router.get('/stats/overview', [auth, authorize('admin', 'manager')], async (req,
 // @access  Private (Admin only)
 router.put('/:id/toggle-status', [
   auth,
-  authorize('admin'),
+  authorize(USER_ROLES.ADMIN),
   auditLog('TOGGLE_USER_STATUS')
 ], async (req, res) => {
   try {

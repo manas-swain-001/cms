@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { USER_ROLES, PERMISSIONS } = require('../constant/enum');
 
 const userSchema = new mongoose.Schema({
   // Basic Information
@@ -33,12 +34,12 @@ const userSchema = new mongoose.Schema({
   // Role and Permissions
   role: {
     type: String,
-    enum: ['admin', 'manager', 'developer', 'employee'],
-    default: 'developer'
+    enum: Object.values(USER_ROLES),
+    default: USER_ROLES.EMPLOYEE
   },
   permissions: [{
     type: String,
-    enum: ['read', 'write', 'delete', 'admin', 'manage_users', 'view_reports', 'manage_attendance', 'manage_tasks']
+    enum: Object.values(PERMISSIONS)
   }],
   
   // Office and Location
@@ -347,7 +348,7 @@ const initializeDefaultUser = async () => {
         password: 'admin123',
         role: 'admin',
         office: 'bhubaneswar',
-        permissions: ['read', 'write', 'delete', 'admin', 'manage_users', 'view_reports'],
+        permissions: Object.values(PERMISSIONS),
         isEmailVerified: true
       });
       console.log('✅ Default admin user created: admin@smartxalgo.com / admin123');

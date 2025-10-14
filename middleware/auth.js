@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { User } = require('../models/User');
+const { USER_ROLES } = require('../constant/enum');
 
 // Authentication middleware
 const auth = async (req, res, next) => {
@@ -30,7 +31,7 @@ const auth = async (req, res, next) => {
       
       // Get user from in-memory store
       const user = await User.findById(decoded.id).lean();
-      
+
       if (user) {
         // Exclude sensitive fields
         const { password, refreshTokens, biometricData, ...safeUser } = user;
@@ -141,7 +142,7 @@ const checkOfficeAccess = (req, res, next) => {
   }
 
   // Admin can access all offices
-  if (req.user.role === 'admin') {
+  if (req.user.role === USER_ROLES.ADMIN) {
     return next();
   }
 
@@ -170,7 +171,7 @@ const selfOrAdmin = (req, res, next) => {
   const targetUserId = req.params.userId || req.params.id;
   
   // Allow if admin or accessing own data
-  if (req.user.role === 'admin' || req.user._id.toString() === targetUserId) {
+  if (req.user.role === USER_ROLES.ADMIN || req.user._id.toString() === targetUserId) {
     return next();
   }
 
@@ -191,12 +192,12 @@ const managerAccess = async (req, res, next) => {
     }
 
     // Admin has full access
-    if (req.user.role === 'admin') {
+    if (req.user.role === USER_ROLES.ADMIN) {
       return next();
     }
 
     // Manager can access their team
-    if (req.user.role === 'manager') {
+    if (req.user.role === USER_ROLES.MANAGER) {
       const targetUserId = req.params.userId || req.params.id;
       
       if (targetUserId) {

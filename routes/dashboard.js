@@ -4,6 +4,7 @@ const { User } = require('../models/User');
 const Attendance = require('../models/Attendance');
 const { Task } = require('../models/Task');
 const { auth, authorize } = require('../middleware/auth');
+const { USER_ROLES } = require('../constant/enum');
 
 const router = express.Router();
 
@@ -15,10 +16,10 @@ router.get('/overview', auth, async (req, res) => {
     const userId = req.user._id;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const startOfWeek = new Date(today);
     startOfWeek.setDate(today.getDate() - today.getDay());
-    
+
     const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
     // Get today's attendance
@@ -38,7 +39,7 @@ router.get('/overview', auth, async (req, res) => {
       userId,
       date: { $gte: startOfWeek, $lte: today }
     });
-    
+
     const weeklyTasks = await Task.find({
       userId,
       date: { $gte: startOfWeek, $lte: today }
@@ -66,11 +67,11 @@ router.get('/overview', auth, async (req, res) => {
           daysPresent: weeklyAttendance.filter(a => a.status === 'present').length,
           daysPartial: weeklyAttendance.filter(a => a.status === 'partial').length,
           totalWorkingHours: weeklyAttendance.reduce((sum, a) => sum + (a.workSummary?.totalHours || 0), 0),
-          averageWorkingHours: weeklyAttendance.length > 0 ? 
+          averageWorkingHours: weeklyAttendance.length > 0 ?
             weeklyAttendance.reduce((sum, a) => sum + (a.workSummary?.totalHours || 0), 0) / weeklyAttendance.length : 0
         },
         tasks: {
-          averageCompliance: weeklyTasks.length > 0 ? 
+          averageCompliance: weeklyTasks.length > 0 ?
             weeklyTasks.reduce((sum, t) => sum + (t.complianceMetrics?.overallScore || 0), 0) / weeklyTasks.length : 0,
           totalTasksCompleted: weeklyTasks.reduce((sum, t) => sum + (t.complianceMetrics?.completedTasks || 0), 0),
           totalTasksAssigned: weeklyTasks.reduce((sum, t) => sum + (t.complianceMetrics?.totalTasks || 0), 0)
@@ -94,14 +95,14 @@ router.get('/overview', auth, async (req, res) => {
 // @route   GET /api/dashboard/team-overview
 // @desc    Get team dashboard overview (for managers)
 // @access  Private (Manager/Admin)
-router.get('/team-overview', [auth, authorize('admin', 'manager')], async (req, res) => {
+router.get('/team-overview', [auth, authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER)], async (req, res) => {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     // Build filter based on user role
     const userFilter = {};
-    if (req.user.role === 'manager') {
+    if (req.user.role === USER_ROLES.MANAGER) {
       userFilter.office = req.user.office;
       userFilter.department = req.user.department;
     }
@@ -143,7 +144,7 @@ router.get('/team-overview', [auth, authorize('admin', 'manager')], async (req, 
         }).length
       },
       tasks: {
-        averageCompliance: teamTasks.length > 0 ? 
+        averageCompliance: teamTasks.length > 0 ?
           teamTasks.reduce((sum, t) => sum + (t.complianceMetrics?.overallScore || 0), 0) / teamTasks.length : 0,
         highPerformers: teamTasks.filter(t => (t.complianceMetrics?.overallScore || 0) >= 80).length,
         needsAttention: teamTasks.filter(t => (t.complianceMetrics?.overallScore || 0) < 50).length,
@@ -226,13 +227,13 @@ router.get('/attendance-widget', [
     // Generate daily data
     const dailyData = [];
     const currentDate = new Date(startDate);
-    
+
     while (currentDate <= today) {
       const dateStr = currentDate.toISOString().split('T')[0];
-      const attendance = attendanceRecords.find(a => 
+      const attendance = attendanceRecords.find(a =>
         a.date.toISOString().split('T')[0] === dateStr
       );
-      
+
       dailyData.push({
         date: dateStr,
         status: attendance ? attendance.status : 'absent',
@@ -240,7 +241,7 @@ router.get('/attendance-widget', [
         punchIn: attendance?.punchIn?.time || null,
         punchOut: attendance?.punchOut?.time || null
       });
-      
+
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
@@ -251,9 +252,9 @@ router.get('/attendance-widget', [
       partialDays: dailyData.filter(d => d.status === 'partial').length,
       absentDays: dailyData.filter(d => d.status === 'absent').length,
       totalWorkingHours: dailyData.reduce((sum, d) => sum + d.workingHours, 0),
-      averageWorkingHours: dailyData.length > 0 ? 
+      averageWorkingHours: dailyData.length > 0 ?
         dailyData.reduce((sum, d) => sum + d.workingHours, 0) / dailyData.length : 0,
-      attendanceRate: dailyData.length > 0 ? 
+      attendanceRate: dailyData.length > 0 ?
         ((dailyData.filter(d => d.status !== 'absent').length / dailyData.length) * 100).toFixed(1) : 0
     };
 
@@ -316,13 +317,13 @@ router.get('/task-compliance-widget', [
     // Generate daily compliance data
     const dailyCompliance = [];
     const currentDate = new Date(startDate);
-    
+
     while (currentDate <= today) {
       const dateStr = currentDate.toISOString().split('T')[0];
-      const task = taskRecords.find(t => 
+      const task = taskRecords.find(t =>
         t.date.toISOString().split('T')[0] === dateStr
       );
-      
+
       dailyCompliance.push({
         date: dateStr,
         complianceScore: task?.complianceMetrics?.overallScore || 0,
@@ -332,23 +333,23 @@ router.get('/task-compliance-widget', [
         afternoonCompliance: task?.afternoon?.completionRate || 0,
         eveningCompliance: task?.evening?.completionRate || 0
       });
-      
+
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
     // Calculate summary
     const summary = {
-      averageCompliance: dailyCompliance.length > 0 ? 
+      averageCompliance: dailyCompliance.length > 0 ?
         dailyCompliance.reduce((sum, d) => sum + d.complianceScore, 0) / dailyCompliance.length : 0,
       totalTasksCompleted: dailyCompliance.reduce((sum, d) => sum + d.completedTasks, 0),
       totalTasksAssigned: dailyCompliance.reduce((sum, d) => sum + d.totalTasks, 0),
-      bestDay: dailyCompliance.reduce((best, current) => 
-        current.complianceScore > best.complianceScore ? current : best, 
+      bestDay: dailyCompliance.reduce((best, current) =>
+        current.complianceScore > best.complianceScore ? current : best,
         { complianceScore: 0, date: null }
       ),
       trend: {
-        improving: dailyCompliance.length >= 2 ? 
-          dailyCompliance[dailyCompliance.length - 1].complianceScore > 
+        improving: dailyCompliance.length >= 2 ?
+          dailyCompliance[dailyCompliance.length - 1].complianceScore >
           dailyCompliance[dailyCompliance.length - 2].complianceScore : false
       }
     };
@@ -373,7 +374,7 @@ router.get('/task-compliance-widget', [
 // @route   GET /api/dashboard/system-health
 // @desc    Get system health widget data
 // @access  Private (Admin/Manager)
-router.get('/system-health', [auth, authorize('admin', 'manager')], async (req, res) => {
+router.get('/system-health', [auth, authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER)], async (req, res) => {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -483,16 +484,16 @@ router.get('/recent-activity', [
         userId,
         updatedAt: { $gte: last24Hours }
       })
-      .sort({ updatedAt: -1 })
-      .limit(parseInt(limit) / 2)
-      .lean(),
+        .sort({ updatedAt: -1 })
+        .limit(parseInt(limit) / 2)
+        .lean(),
       Task.find({
         userId,
         updatedAt: { $gte: last24Hours }
       })
-      .sort({ updatedAt: -1 })
-      .limit(parseInt(limit) / 2)
-      .lean()
+        .sort({ updatedAt: -1 })
+        .limit(parseInt(limit) / 2)
+        .lean()
     ]);
 
     // Format activities
@@ -509,7 +510,7 @@ router.get('/recent-activity', [
           location: attendance.punchIn.location?.address || 'Unknown location'
         });
       }
-      
+
       if (attendance.punchOut) {
         activities.push({
           type: 'attendance',
@@ -590,7 +591,7 @@ router.get('/performance-metrics', [
         startDate.setMonth(endDate.getMonth() - 3);
         break;
     }
-    
+
     startDate.setHours(0, 0, 0, 0);
     endDate.setHours(23, 59, 59, 999);
 

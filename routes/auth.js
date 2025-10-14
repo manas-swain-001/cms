@@ -5,6 +5,7 @@ const { body, validationResult } = require('express-validator');
 const { User } = require('../models/User');
 const { auth } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { USER_ROLES } = require('../constant/enum');
 
 const router = express.Router();
 
@@ -30,7 +31,7 @@ router.post('/register', [
     .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
     .withMessage('Password must contain at least one uppercase letter, one lowercase letter, and one number'),
   body('role')
-    .isIn(['admin', 'manager', 'developer', 'sales', 'field'])
+    .isIn(Object.values(USER_ROLES))
     .withMessage('Invalid role specified'),
   body('office')
     .isIn(['bhubaneswar', 'mumbai', 'bangalore', 'delhi'])

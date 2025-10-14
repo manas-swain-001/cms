@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Task = require('../models/Task');
+const { USER_ROLES } = require('../constant/enum');
 
 class SocketHandler {
   constructor(io) {
@@ -35,7 +36,7 @@ class SocketHandler {
       }
       
       // Join managers/admins to management room
-      if (['admin', 'manager'].includes(socket.user.role)) {
+      if ([USER_ROLES.ADMIN, USER_ROLES.MANAGER].includes(socket.user.role)) {
         socket.join('management');
       }
 
@@ -324,7 +325,7 @@ class SocketHandler {
       `department_${user.department}`
     ];
     
-    if (['admin', 'manager'].includes(user.role)) {
+    if ([USER_ROLES.ADMIN, USER_ROLES.MANAGER].includes(user.role)) {
       validRooms.push('management');
     }
     

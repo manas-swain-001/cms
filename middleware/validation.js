@@ -1,5 +1,6 @@
 const { body, param, query, validationResult } = require('express-validator');
 const mongoose = require('mongoose');
+const { USER_ROLES } = require('../constant/enum');
 
 // Helper function to handle validation results
 const handleValidationErrors = (req, res, next) => {
@@ -33,7 +34,7 @@ const isValidTimeSlot = (value) => {
 };
 
 const isValidRole = (value) => {
-  return ['admin', 'manager', 'employee'].includes(value);
+  return Object.values(USER_ROLES).includes(value);
 };
 
 const isValidAttendanceStatus = (value) => {
@@ -66,7 +67,7 @@ const validateRegister = [
   body('role')
     .optional()
     .custom(isValidRole)
-    .withMessage('Role must be admin, manager, or employee'),
+    .withMessage('Role must be ' + Object.values(USER_ROLES).join(', ')),
   body('office')
     .optional()
     .trim()
@@ -146,7 +147,7 @@ const validateUserUpdate = [
   body('role')
     .optional()
     .custom(isValidRole)
-    .withMessage('Role must be admin, manager, or employee'),
+    .withMessage('Role must be ' + Object.values(USER_ROLES).join(', ')),
   body('office')
     .optional()
     .trim()
@@ -171,7 +172,7 @@ const validateUserUpdate = [
 const validateRoleAssignment = [
   body('role')
     .custom(isValidRole)
-    .withMessage('Role must be admin, manager, or employee'),
+    .withMessage('Role must be ' + Object.values(USER_ROLES).join(', ')),
   body('permissions')
     .optional()
     .isArray()
