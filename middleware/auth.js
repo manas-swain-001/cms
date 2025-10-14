@@ -29,7 +29,7 @@ const auth = async (req, res, next) => {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       
       // Get user from in-memory store
-      const user = await User.findById(decoded.id, { select: '+password' });
+      const user = await User.findById(decoded.id).lean();
       
       if (user) {
         // Exclude sensitive fields
@@ -44,7 +44,7 @@ const auth = async (req, res, next) => {
       } else {
         req.user = null;
       }
-      
+
       if (!req.user) {
         return res.status(401).json({
           success: false,

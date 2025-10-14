@@ -40,13 +40,13 @@ router.post('/punch-in', [
     today.setHours(0, 0, 0, 0);
 
     // Check if user already punched in today
-    const existingAttendance = Attendance.findOne({
+    const existingAttendance = await Attendance.findOne({
       userId,
       date: today,
       status: ['present', 'partial']
     });
 
-    if (existingAttendance && existingAttendance.punchIn && !existingAttendance.punchOut) {
+    if (existingAttendance && existingAttendance.checkIn && !existingAttendance.checkOut) {
       return res.status(400).json({
         success: false,
         message: 'You have already punched in today. Please punch out first.'
@@ -58,21 +58,21 @@ router.post('/punch-in', [
     
     if (existingAttendance) {
       // Update existing record (in case of multiple punch-ins after punch-out)
-      attendance = Attendance.findByIdAndUpdate(existingAttendance._id, {
-        punchIn: {
+      attendance = await Attendance.findByIdAndUpdate(existingAttendance._id, {
+        checkIn: {
           time: new Date(),
           location,
           notes,
           method: 'manual' // Could be 'biometric', 'qr', etc.
         },
         status: 'present'
-      });
+      }, { new: true });
     } else {
       // Create new attendance record
       attendance = new Attendance({
         userId,
         date: today,
-        punchIn: {
+        checkIn: {
           time: new Date(),
           location,
           notes,
@@ -81,11 +81,11 @@ router.post('/punch-in', [
         status: 'present',
         office: req.user.office
       });
-      attendance.save();
+      attendance = await attendance.save();
     }
 
     // Get user details for response
-    const user = User.findById(userId);
+    const user = await User.findById(userId);
     if (user) {
       attendance.userId = {
         _id: user._id,
@@ -145,13 +145,13 @@ router.post('/punch-out', [
     today.setHours(0, 0, 0, 0);
 
     // Find today's attendance record
-    const attendance = Attendance.findOne({
+    const attendance = await Attendance.findOne({
       userId,
       date: today,
       status: ['present', 'partial']
     });
 
-    if (!attendance || !attendance.punchIn) {
+    if (!attendance || !attendance.checkIn) {
       return res.status(400).json({
         success: false,
         message: 'No punch-in record found for today. Please punch in first.'
@@ -166,7 +166,7 @@ router.post('/punch-out', [
     }
 
     // Update attendance with punch out
-    attendance.punchOut = {
+    attendance.checkOut = {
       time: new Date(),
       location,
       notes,
@@ -174,7 +174,7 @@ router.post('/punch-out', [
     };
 
     // Calculate work duration
-    const workDuration = attendance.punchOut.time - attendance.punchIn.time;
+    const workDuration = attendance.checkOut.time - attendance.checkIn.time;
     attendance.workSummary.totalHours = Math.round((workDuration / (1000 * 60 * 60)) * 100) / 100;
     
     // Determine status based on work hours
@@ -185,14 +185,14 @@ router.post('/punch-out', [
       attendance.status = 'partial';
     }
 
-    Attendance.findByIdAndUpdate(attendance._id, {
-      punchOut: attendance.punchOut,
+    await Attendance.findByIdAndUpdate(attendance._id, {
+      checkOut: attendance.checkOut,
       workSummary: attendance.workSummary,
       status: attendance.status
     });
 
     // Get user details for response
-    const user = User.findById(userId);
+    const user = await User.findById(userId);
     if (user) {
       attendance.userId = {
         _id: user._id,
@@ -250,14 +250,14 @@ router.post('/break-start', [
       status: ['present', 'partial']
     });
 
-    if (!attendance || !attendance.punchIn) {
+    if (!attendance || !attendance.checkIn) {
       return res.status(400).json({
         success: false,
         message: 'Please punch in first before taking a break.'
       });
     }
 
-    if (attendance.punchOut) {
+    if (attendance.checkOut) {
       return res.status(400).json({
         success: false,
         message: 'Cannot start break after punching out.'
