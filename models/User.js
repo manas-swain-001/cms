@@ -53,6 +53,10 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  designation: {
+    type: String,
+    trim: true
+  },
   employeeId: {
     type: String,
     sparse: true
@@ -232,22 +236,6 @@ userSchema.pre('save', async function (next) {
     next(error);
   }
 });
-
-// Pre-save middleware to generate employee ID
-/* userSchema.pre('save', async function(next) {
-  if (this.isNew && !this.employeeId) {
-    try {
-      const count = await this.constructor.countDocuments({ office: this.office });
-      const officeCode = this.office.substring(0, 3).toUpperCase();
-      this.employeeId = `${officeCode}${String(count + 1).padStart(4, '0')}`;
-      next();
-    } catch (error) {
-      next(error);
-    }
-  } else {
-    next();
-  }
-}); */
 
 userSchema.pre('save', async function (next) {
   if (this.isNew && !this.employeeId) {

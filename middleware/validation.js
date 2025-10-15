@@ -158,6 +158,11 @@ const validateUserUpdate = [
     .trim()
     .isLength({ min: 2, max: 100 })
     .withMessage('Department must be between 2 and 100 characters'),
+  body('designation')
+    .optional()
+    .trim()
+    .isLength({ min: 2, max: 100 })
+    .withMessage('Designation must be between 2 and 100 characters'),
   body('phoneNumber')
     .optional()
     .isMobilePhone()

@@ -103,7 +103,7 @@ router.post('/save', [
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
-    
+
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -297,7 +297,7 @@ router.get('/', [
 // @access  Private (Self/Admin/Manager)
 router.get('/:id', [auth, managerAccess], async (req, res) => {
   try {
-    const user = User.findById(req.params.id);
+    const user = await User.findById(req.params.id);
 
     if (!user) {
       return res.status(404).json({
@@ -306,7 +306,7 @@ router.get('/:id', [auth, managerAccess], async (req, res) => {
       });
     }
 
-    const userObj = { ...user };
+    const userObj = user.toObject();
     delete userObj.password;
     delete userObj.refreshTokens;
     delete userObj.biometricData?.faceEncoding;
@@ -382,7 +382,7 @@ router.put('/:id', [
       });
     }
 
-    const user = User.findByIdAndUpdate(userId, { ...updates, updatedAt: new Date() });
+    const user = await User.findByIdAndUpdate(userId, { ...updates, updatedAt: new Date() }, { new: true });
 
     if (!user) {
       return res.status(404).json({
@@ -391,7 +391,7 @@ router.put('/:id', [
       });
     }
 
-    const userObj = { ...user };
+    const userObj = user.toObject();
     delete userObj.password;
     delete userObj.refreshTokens;
     delete userObj.biometricData?.faceEncoding;
