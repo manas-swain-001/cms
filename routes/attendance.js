@@ -3,7 +3,7 @@ const { body, validationResult, query } = require('express-validator');
 const Attendance = require('../models/Attendance');
 const { User } = require('../models/User');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
-const { USER_ROLES } = require('../constant/enum');
+const { USER_ROLES, ATTENDANCE_STATUS } = require('../constant/enum');
 
 const router = express.Router();
 
@@ -23,6 +23,16 @@ router.post('/punch-in', [
     .trim()
     .isLength({ max: 200 })
     .withMessage('Address must not exceed 200 characters'),
+  body('notes')
+    .optional()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Notes must not exceed 500 characters'),
+  body('deviceId')
+    .optional()
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage('Device ID must not exceed 100 characters'),
   auditLog('PUNCH_IN')
 ], async (req, res) => {
   try {
@@ -40,47 +50,68 @@ router.post('/punch-in', [
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Check if user already punched in today
+    // Check if user already punched in today and has an active session
     const existingAttendance = await Attendance.findOne({
       userId,
-      date: today,
-      status: ['present', 'partial']
+      date: today
     });
 
-    if (existingAttendance && existingAttendance.checkIn && !existingAttendance.checkOut) {
+    // Check if there's an active session (check-in without check-out)
+    const hasActiveSession = existingAttendance?.sessions?.some(session => 
+      session.checkIn?.time && !session.checkOut?.time
+    );
+
+    if (hasActiveSession) {
       return res.status(400).json({
         success: false,
-        message: 'You have already punched in today. Please punch out first.'
+        message: 'You have an active session. Please punch out first.'
       });
     }
 
     // Create new attendance record or update existing one
     let attendance;
+    const newSession = {
+      checkIn: {
+        time: new Date(),
+        location,
+        method: 'manual',
+        deviceInfo: {
+          userAgent: req.get('User-Agent'),
+          ipAddress: req.ip,
+          deviceId: req.body.deviceId || ''
+        },
+        isLate: false,
+        lateMinutes: 0
+      }
+    };
+
+    // Check if user is late (assuming 9 AM is standard start time)
+    const now = new Date();
+    const standardStartTime = new Date(today);
+    standardStartTime.setHours(9, 0, 0, 0);
+    
+    if (now > standardStartTime) {
+      newSession.checkIn.isLate = true;
+      newSession.checkIn.lateMinutes = Math.round((now - standardStartTime) / (1000 * 60));
+    }
     
     if (existingAttendance) {
-      // Update existing record (in case of multiple punch-ins after punch-out)
-      attendance = await Attendance.findByIdAndUpdate(existingAttendance._id, {
-        checkIn: {
-          time: new Date(),
-          location,
-          notes,
-          method: 'manual' // Could be 'biometric', 'qr', etc.
+      // Add new session to existing record
+      attendance = await Attendance.findByIdAndUpdate(
+        existingAttendance._id,
+        { 
+          $push: { sessions: newSession },
+          status: 'present'
         },
-        status: 'present'
-      }, { new: true });
+        { new: true }
+      );
     } else {
       // Create new attendance record
       attendance = new Attendance({
         userId,
         date: today,
-        checkIn: {
-          time: new Date(),
-          location,
-          notes,
-          method: 'manual'
-        },
-        status: 'present',
-        office: req.user.office
+        sessions: [newSession],
+        status: 'present'
       });
       attendance = await attendance.save();
     }
@@ -128,6 +159,16 @@ router.post('/punch-out', [
     .trim()
     .isLength({ max: 200 })
     .withMessage('Address must not exceed 200 characters'),
+  body('notes')
+    .optional()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Notes must not exceed 500 characters'),
+  body('deviceId')
+    .optional()
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage('Device ID must not exceed 100 characters'),
   auditLog('PUNCH_OUT')
 ], async (req, res) => {
   try {
@@ -148,49 +189,72 @@ router.post('/punch-out', [
     // Find today's attendance record
     const attendance = await Attendance.findOne({
       userId,
-      date: today,
-      status: ['present', 'partial']
+      date: today
     });
 
-    if (!attendance || !attendance.checkIn) {
+    if (!attendance || !attendance.sessions || attendance.sessions.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'No punch-in record found for today. Please punch in first.'
       });
     }
 
-    if (attendance.punchOut) {
+    // Find the active session (check-in without check-out)
+    const activeSessionIndex = attendance.sessions.findIndex(session => 
+      session.checkIn?.time && !session.checkOut?.time
+    );
+
+    if (activeSessionIndex === -1) {
       return res.status(400).json({
         success: false,
-        message: 'You have already punched out today.'
+        message: 'No active session found. Please punch in first.'
       });
     }
 
-    // Update attendance with punch out
-    attendance.checkOut = {
+    // Update the active session with check-out
+    const activeSession = attendance.sessions[activeSessionIndex];
+    activeSession.checkOut = {
       time: new Date(),
       location,
-      notes,
-      method: 'manual'
+      method: 'manual',
+      deviceInfo: {
+        userAgent: req.get('User-Agent'),
+        ipAddress: req.ip,
+        deviceId: req.body.deviceId || ''
+      },
+      isEarly: false,
+      earlyMinutes: 0
     };
 
-    // Calculate work duration
-    const workDuration = attendance.checkOut.time - attendance.checkIn.time;
-    attendance.workSummary.totalHours = Math.round((workDuration / (1000 * 60 * 60)) * 100) / 100;
+    // Calculate session duration
+    const sessionDuration = activeSession.checkOut.time - activeSession.checkIn.time;
+    activeSession.duration = Math.round((sessionDuration / (1000 * 60)) * 100) / 100; // Duration in minutes
+
+    // Check if user is leaving early (assuming 6 PM is standard end time)
+    const now = new Date();
+    const standardEndTime = new Date(today);
+    standardEndTime.setHours(18, 0, 0, 0);
     
-    // Determine status based on work hours
+    if (now < standardEndTime) {
+      activeSession.checkOut.isEarly = true;
+      activeSession.checkOut.earlyMinutes = Math.round((standardEndTime - now) / (1000 * 60));
+    }
+
+    // Update the attendance record
+    attendance.sessions[activeSessionIndex] = activeSession;
+    
+    // Recalculate work summary
+    attendance.calculateWorkSummary();
+    
+    // Determine overall status based on total work hours
     const minWorkHours = 8; // Configurable
-    if (attendance.workSummary.totalHours >= minWorkHours) {
+    if (attendance.workSummary.effectiveHours >= minWorkHours) {
       attendance.status = 'present';
     } else {
       attendance.status = 'partial';
     }
 
-    await Attendance.findByIdAndUpdate(attendance._id, {
-      checkOut: attendance.checkOut,
-      workSummary: attendance.workSummary,
-      status: attendance.status
-    });
+    await attendance.save();
 
     // Get user details for response
     const user = await User.findById(userId);
@@ -227,6 +291,11 @@ router.post('/break-start', [
   body('breakType')
     .isIn(['lunch', 'tea', 'personal', 'meeting'])
     .withMessage('Invalid break type'),
+  body('notes')
+    .optional()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Notes must not exceed 500 characters'),
   auditLog('BREAK_START')
 ], async (req, res) => {
   try {
@@ -245,23 +314,27 @@ router.post('/break-start', [
     today.setHours(0, 0, 0, 0);
 
     // Find today's attendance record
-    const attendance = Attendance.findOne({
+    const attendance = await Attendance.findOne({
       userId,
-      date: today,
-      status: ['present', 'partial']
+      date: today
     });
 
-    if (!attendance || !attendance.checkIn) {
+    if (!attendance || !attendance.sessions || attendance.sessions.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'Please punch in first before taking a break.'
       });
     }
 
-    if (attendance.checkOut) {
+    // Check if there's an active session (check-in without check-out)
+    const hasActiveSession = attendance.sessions.some(session => 
+      session.checkIn?.time && !session.checkOut?.time
+    );
+
+    if (!hasActiveSession) {
       return res.status(400).json({
         success: false,
-        message: 'Cannot start break after punching out.'
+        message: 'You must be punched in to take a break.'
       });
     }
 
@@ -275,15 +348,15 @@ router.post('/break-start', [
     }
 
     // Add new break
-    attendance.breaks.push({
+    const newBreak = {
       type: breakType,
       startTime: new Date(),
-      notes
-    });
+      notes: notes || ''
+    };
 
-    Attendance.findByIdAndUpdate(attendance._id, {
-      breaks: attendance.breaks
-    });
+    attendance.breaks.push(newBreak);
+
+    await attendance.save();
 
     res.json({
       success: true,
@@ -307,6 +380,11 @@ router.post('/break-start', [
 // @access  Private
 router.post('/break-end', [
   auth,
+  body('notes')
+    .optional()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Notes must not exceed 500 characters'),
   auditLog('BREAK_END')
 ], async (req, res) => {
   try {
@@ -316,10 +394,9 @@ router.post('/break-end', [
     today.setHours(0, 0, 0, 0);
 
     // Find today's attendance record
-    const attendance = Attendance.findOne({
+    const attendance = await Attendance.findOne({
       userId,
-      date: today,
-      status: ['present', 'partial']
+      date: today
     });
 
     if (!attendance) {
@@ -348,15 +425,10 @@ router.post('/break-end', [
       ongoingBreak.notes = (ongoingBreak.notes || '') + ' ' + notes;
     }
 
-    // Update total break time
-    attendance.workSummary.breakTime = attendance.breaks
-      .filter(b => b.duration)
-      .reduce((total, b) => total + b.duration, 0);
+    // Recalculate work summary
+    attendance.calculateWorkSummary();
 
-    Attendance.findByIdAndUpdate(attendance._id, {
-      breaks: attendance.breaks,
-      workSummary: attendance.workSummary
-    });
+    await attendance.save();
 
     res.json({
       success: true,
@@ -419,8 +491,15 @@ router.get('/today', auth, async (req, res) => {
     // Determine current status
     let currentStatus = 'not_punched_in';
     let ongoingBreak = null;
+    let activeSession = null;
     
-    if (attendance.checkIn && !attendance.checkOut?.time) {
+    // Check if there's an active session (check-in without check-out)
+    const activeSessionIndex = attendance.sessions?.findIndex(session => 
+      session.checkIn?.time && !session.checkOut?.time
+    );
+    
+    if (activeSessionIndex !== -1 && activeSessionIndex !== undefined) {
+      activeSession = attendance.sessions[activeSessionIndex];
       const activeBreak = attendance.breaks?.find(b => b.startTime && !b.endTime);
       if (activeBreak) {
         currentStatus = 'on_break';
@@ -428,8 +507,14 @@ router.get('/today', auth, async (req, res) => {
       } else {
         currentStatus = 'working';
       }
-    } else if (attendance.checkIn && attendance.checkOut) {
-      currentStatus = 'punched_out';
+    } else if (attendance.sessions && attendance.sessions.length > 0) {
+      // Check if all sessions are completed
+      const allSessionsCompleted = attendance.sessions.every(session => 
+        session.checkIn?.time && session.checkOut?.time
+      );
+      if (allSessionsCompleted) {
+        currentStatus = 'punched_out';
+      }
     }
 
     res.json({
@@ -437,9 +522,12 @@ router.get('/today', auth, async (req, res) => {
       data: {
         attendance,
         currentStatus,
+        activeSession,
         ongoingBreak,
         workingHours: attendance?.workSummary?.totalHours || 0,
-        breakTime: attendance?.workSummary?.breakTime || 0
+        breakTime: attendance?.workSummary?.totalBreakTime || 0,
+        effectiveHours: attendance?.workSummary?.effectiveHours || 0,
+        totalSessions: attendance?.sessions?.length || 0
       }
     });
   } catch (error) {
@@ -497,25 +585,29 @@ router.get('/history', [
     // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    // Execute query
-    const allRecords = Attendance.find(filter);
-    const total = allRecords.length;
+    // Execute query with proper pagination
+    const total = await Attendance.countDocuments(filter);
     
-    // Apply sorting
-    allRecords.sort((a, b) => new Date(b.date) - new Date(a.date));
-    
-    // Apply pagination
-    const attendanceRecords = allRecords.slice(skip, skip + parseInt(limit)).map(record => {
-      const user = User.findById(record.userId);
-      if (user) {
-        record.userId = {
-          _id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email
-        };
-      }
-      return record;
+    const attendanceRecords = await Attendance.find(filter)
+      .sort({ date: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate('userId', 'firstName lastName email role office department');
+
+    // Process records to include user details and session information
+    const processedRecords = attendanceRecords.map(record => {
+      const recordObj = record.toObject();
+      
+      // Add session summary
+      recordObj.sessionSummary = {
+        totalSessions: record.sessions?.length || 0,
+        completedSessions: record.sessions?.filter(s => s.checkIn?.time && s.checkOut?.time).length || 0,
+        activeSessions: record.sessions?.filter(s => s.checkIn?.time && !s.checkOut?.time).length || 0,
+        firstCheckIn: record.sessions?.[0]?.checkIn?.time || null,
+        lastCheckOut: record.sessions?.slice().reverse().find(s => s.checkOut?.time)?.checkOut?.time || null
+      };
+      
+      return recordObj;
     });
 
     // Calculate pagination info
@@ -524,7 +616,7 @@ router.get('/history', [
     res.json({
       success: true,
       data: {
-        attendanceRecords,
+        attendanceRecords: processedRecords,
         pagination: {
           currentPage: parseInt(page),
           totalPages,
@@ -574,38 +666,18 @@ router.get('/team', [
     }
 
     // Get team members
-    const teamMembers = User.find({
+    const teamMembers = await User.find({
       ...userFilter,
-      isActive: true
-    }).filter(user => user._id !== req.user._id) // Exclude self
-      .map(user => ({
-        _id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: user.role,
-        office: user.office,
-        department: user.department
-      }));
+      isActive: true,
+      _id: { $ne: req.user._id } // Exclude self
+    }).select('firstName lastName email role office department');
 
     // Get attendance for team members
     const teamIds = teamMembers.map(member => member._id);
-    const attendanceRecords = Attendance.find({
-      userId: teamIds,
+    const attendanceRecords = await Attendance.find({
+      userId: { $in: teamIds },
       date: targetDate
-    }).map(record => {
-      const user = User.findById(record.userId);
-      if (user) {
-        record.userId = {
-          _id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          role: user.role
-        };
-      }
-      return record;
-    });
+    }).populate('userId', 'firstName lastName email role office department');
 
     // Combine team members with their attendance
     const teamAttendance = teamMembers.map(member => {
@@ -613,13 +685,30 @@ router.get('/team', [
         record => record.userId._id.toString() === member._id.toString()
       );
       
+      let status = 'absent';
+      let firstCheckIn = null;
+      let lastCheckOut = null;
+      let totalSessions = 0;
+      let activeSessions = 0;
+      
+      if (attendance) {
+        status = attendance.status;
+        totalSessions = attendance.sessions?.length || 0;
+        activeSessions = attendance.sessions?.filter(s => s.checkIn?.time && !s.checkOut?.time).length || 0;
+        firstCheckIn = attendance.sessions?.[0]?.checkIn?.time || null;
+        lastCheckOut = attendance.sessions?.slice().reverse().find(s => s.checkOut?.time)?.checkOut?.time || null;
+      }
+      
       return {
         user: member,
         attendance: attendance || null,
-        status: attendance ? attendance.status : 'absent',
-        workingHours: attendance ? attendance.workSummary.totalHours : 0,
-        punchInTime: attendance && attendance.punchIn ? attendance.punchIn.time : null,
-        punchOutTime: attendance && attendance.punchOut ? attendance.punchOut.time : null
+        status,
+        workingHours: attendance?.workSummary?.totalHours || 0,
+        effectiveHours: attendance?.workSummary?.effectiveHours || 0,
+        firstCheckIn,
+        lastCheckOut,
+        totalSessions,
+        activeSessions
       };
     });
 
@@ -630,12 +719,14 @@ router.get('/team', [
       partial: teamAttendance.filter(ta => ta.status === 'partial').length,
       absent: teamAttendance.filter(ta => ta.status === 'absent').length,
       late: teamAttendance.filter(ta => {
-        if (!ta.attendance || !ta.attendance.punchIn) return false;
-        const punchInTime = new Date(ta.attendance.punchIn.time);
+        if (!ta.attendance || !ta.firstCheckIn) return false;
+        const punchInTime = new Date(ta.firstCheckIn);
         const expectedTime = new Date(targetDate);
         expectedTime.setHours(9, 0, 0, 0); // 9 AM expected time
         return punchInTime > expectedTime;
-      }).length
+      }).length,
+      activeSessions: teamAttendance.reduce((sum, ta) => sum + ta.activeSessions, 0),
+      totalSessions: teamAttendance.reduce((sum, ta) => sum + ta.totalSessions, 0)
     };
 
     res.json({
@@ -687,13 +778,13 @@ router.get('/reports/summary', [
 
     // Role-based filtering
     if (req.user.role === USER_ROLES.MANAGER) {
-      const teamMembers = User.find({
+      const teamMembers = await User.find({
         office: req.user.office,
         department: req.user.department,
         isActive: true
-      }).map(user => user._id);
+      }).select('_id');
       
-      filter.userId = teamMembers;
+      filter.userId = { $in: teamMembers.map(user => user._id) };
     }
 
     if (userId) {
@@ -701,7 +792,7 @@ router.get('/reports/summary', [
     }
 
     // Get attendance summary
-    const summary = Attendance.getAttendanceSummary(filter);
+    const summary = await Attendance.getAttendanceSummary(filter.userId, new Date(startDate), new Date(endDate));
 
     res.json({
       success: true,
@@ -741,22 +832,8 @@ router.put('/:id/approve', [
     const attendanceId = req.params.id;
     const { notes } = req.body;
 
-    const attendance = Attendance.findById(attendanceId);
+    const attendance = await Attendance.findById(attendanceId).populate('userId', 'firstName lastName email office department');
     
-    if (attendance) {
-      const user = User.findById(attendance.userId);
-      if (user) {
-        attendance.userId = {
-          _id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          office: user.office,
-          department: user.department
-        };
-      }
-    }
-
     if (!attendance) {
       return res.status(404).json({
         success: false,
@@ -776,14 +853,12 @@ router.put('/:id/approve', [
     }
 
     // Update approval status
-    const updatedAttendance = Attendance.findByIdAndUpdate(attendanceId, {
-      approval: {
-        status: 'approved',
-        approvedBy: req.user._id,
-        approvedAt: new Date(),
-        notes
-      }
-    });
+    const updatedAttendance = await Attendance.findByIdAndUpdate(attendanceId, {
+      isValidated: true,
+      validatedBy: req.user._id,
+      validatedAt: new Date(),
+      notes: notes || ''
+    }, { new: true }).populate('userId', 'firstName lastName email office department');
     
     if (!updatedAttendance) {
       return res.status(404).json({
@@ -795,13 +870,102 @@ router.put('/:id/approve', [
     res.json({
       success: true,
       message: 'Attendance approved successfully',
-      data: { attendance }
+      data: { attendance: updatedAttendance }
     });
   } catch (error) {
     console.error('Approve attendance error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error while approving attendance'
+    });
+  }
+});
+
+// @route   GET /api/attendance/sessions/:id
+// @desc    Get detailed session information
+// @access  Private
+router.get('/sessions/:id', auth, async (req, res) => {
+  try {
+    const attendanceId = req.params.id;
+    const userId = req.user._id;
+
+    const attendance = await Attendance.findOne({
+      _id: attendanceId,
+      userId
+    }).populate('userId', 'firstName lastName email role office department');
+
+    if (!attendance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Attendance record not found'
+      });
+    }
+
+    // Get session summary
+    const sessionSummary = attendance.getSessionSummary();
+    const activeSession = attendance.getActiveSession();
+    const completedSessions = attendance.getCompletedSessions();
+
+    res.json({
+      success: true,
+      data: {
+        attendance,
+        sessionSummary,
+        activeSession,
+        completedSessions,
+        isCurrentlyWorking: attendance.isCurrentlyWorking(),
+        isOnBreak: attendance.isOnBreak()
+      }
+    });
+  } catch (error) {
+    console.error('Get session details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching session details'
+    });
+  }
+});
+
+// @route   GET /api/attendance/stats
+// @desc    Get attendance statistics for user
+// @access  Private
+router.get('/stats', [
+  auth,
+  query('startDate').optional().isISO8601().withMessage('Start date must be a valid date'),
+  query('endDate').optional().isISO8601().withMessage('End date must be a valid date')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const userId = req.user._id;
+    const { startDate, endDate } = req.query;
+
+    // Default to last 30 days if no dates provided
+    const end = endDate ? new Date(endDate) : new Date();
+    const start = startDate ? new Date(startDate) : new Date();
+    start.setDate(start.getDate() - 30);
+
+    const stats = await Attendance.getAttendanceStats(userId, start, end);
+
+    res.json({
+      success: true,
+      data: {
+        period: { startDate: start, endDate: end },
+        stats
+      }
+    });
+  } catch (error) {
+    console.error('Get attendance stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching attendance statistics'
     });
   }
 });
