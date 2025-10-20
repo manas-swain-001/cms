@@ -61,6 +61,20 @@ const userSchema = new mongoose.Schema({
     type: String,
     sparse: true
   },
+  accNo: {
+    type: String,
+    required: false, // Made optional for existing users
+    trim: true,
+    unique: true,
+    sparse: true, // Allows multiple null values for unique constraint
+    match: [/^[A-Z0-9]{8,20}$/, 'Account number must be 8-20 characters long and contain only uppercase letters and numbers']
+  },
+  salary: {
+    type: Number,
+    required: false, // Made optional for existing users
+    min: [0, 'Salary cannot be negative'],
+    max: [99999999, 'Salary cannot exceed 99,999,999']
+  },
 
   // Contact Information
   phone: {
@@ -221,6 +235,8 @@ userSchema.index({ email: 1 });
 userSchema.index({ employeeId: 1 });
 userSchema.index({ office: 1 });
 userSchema.index({ role: 1 });
+userSchema.index({ accNo: 1 });
+userSchema.index({ salary: 1 });
 
 // Pre-save middleware to hash password
 userSchema.pre('save', async function (next) {
@@ -354,7 +370,9 @@ const initializeDefaultUser = async () => {
         role: 'admin',
         office: 'bhubaneswar',
         permissions: Object.values(PERMISSIONS),
-        isEmailVerified: true
+        isEmailVerified: true,
+        accNo: 'ADMIN001',
+        salary: 100000
       });
       console.log('✅ Default admin user created: admin@smartxalgo.com / admin123');
     }
