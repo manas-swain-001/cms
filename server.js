@@ -119,6 +119,7 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/dashboard', require('./routes/dashboard'));
+app.use('/api/sms', require('./routes/sms'));
 
 // WebSocket status endpoint
 app.get('/api/websocket/status', (req, res) => {
