@@ -32,6 +32,10 @@ connectDB();
 // Initialize WebSocket handler
 const socketHandler = new SocketHandler(io);
 
+// Initialize SMS Cron Jobs
+const smsCronJob = require('./cron/smsCron');
+// smsCronJob.start();
+
 // Make socket handler available to routes
 app.set('socketHandler', socketHandler);
 
@@ -120,6 +124,7 @@ app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/sms', require('./routes/sms'));
+app.use('/api/cron', require('./routes/cron'));
 
 // WebSocket status endpoint
 app.get('/api/websocket/status', (req, res) => {

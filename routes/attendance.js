@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult, query } = require('express-validator');
 const Attendance = require('../models/Attendance');
 const { User } = require('../models/User');
+const { Task } = require('../models/Task');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
 const { USER_ROLES, ATTENDANCE_STATUS } = require('../constant/enum');
 
@@ -18,24 +19,18 @@ router.post('/punch-in', [
   body('location.longitude')
     .isFloat({ min: -180, max: 180 })
     .withMessage('Longitude must be between -180 and 180'),
-  body('location.address')
-    .optional()
-    .trim()
-    .isLength({ max: 200 })
-    .withMessage('Address must not exceed 200 characters'),
   body('notes')
     .optional()
     .trim()
     .isLength({ max: 500 })
     .withMessage('Notes must not exceed 500 characters'),
-  body('deviceId')
-    .optional()
-    .trim()
-    .isLength({ max: 100 })
-    .withMessage('Device ID must not exceed 100 characters'),
   auditLog('PUNCH_IN')
 ], async (req, res) => {
   try {
+
+    console.log(req?.header)
+
+    // return 0;
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({
@@ -57,7 +52,7 @@ router.post('/punch-in', [
     });
 
     // Check if there's an active session (check-in without check-out)
-    const hasActiveSession = existingAttendance?.sessions?.some(session => 
+    const hasActiveSession = existingAttendance?.sessions?.some(session =>
       session.checkIn?.time && !session.checkOut?.time
     );
 
@@ -67,6 +62,8 @@ router.post('/punch-in', [
         message: 'You have an active session. Please punch out first.'
       });
     }
+
+    console.log('Punch in :::: ', new Date());
 
     // Create new attendance record or update existing one
     let attendance;
@@ -78,7 +75,6 @@ router.post('/punch-in', [
         deviceInfo: {
           userAgent: req.get('User-Agent'),
           ipAddress: req.ip,
-          deviceId: req.body.deviceId || ''
         },
         isLate: false,
         lateMinutes: 0
@@ -89,17 +85,17 @@ router.post('/punch-in', [
     const now = new Date();
     const standardStartTime = new Date(today);
     standardStartTime.setHours(9, 0, 0, 0);
-    
+
     if (now > standardStartTime) {
       newSession.checkIn.isLate = true;
       newSession.checkIn.lateMinutes = Math.round((now - standardStartTime) / (1000 * 60));
     }
-    
+
     if (existingAttendance) {
       // Add new session to existing record
       attendance = await Attendance.findByIdAndUpdate(
         existingAttendance._id,
-        { 
+        {
           $push: { sessions: newSession },
           status: 'present'
         },
@@ -129,6 +125,19 @@ router.post('/punch-in', [
       };
     }
 
+    // Silently create task with scheduled entries based on punch-in time
+    try {
+      const punchInTime = newSession.checkIn.time;
+      const punchInTimeString = punchInTime.toTimeString().slice(0, 5); // Format as HH:MM
+
+      // Create task with scheduled entries
+      await Task.createTaskWithPunchIn(userId, punchInTimeString);
+      console.log(`📋 Task created for user ${userId} with punch-in time ${punchInTimeString}`);
+    } catch (taskError) {
+      // Log error but don't fail the punch-in
+      console.error('❌ Error creating task during punch-in:', taskError.message);
+    }
+
     res.json({
       success: true,
       message: 'Punched in successfully',
@@ -154,21 +163,11 @@ router.post('/punch-out', [
   body('location.longitude')
     .isFloat({ min: -180, max: 180 })
     .withMessage('Longitude must be between -180 and 180'),
-  body('location.address')
-    .optional()
-    .trim()
-    .isLength({ max: 200 })
-    .withMessage('Address must not exceed 200 characters'),
   body('notes')
     .optional()
     .trim()
     .isLength({ max: 500 })
     .withMessage('Notes must not exceed 500 characters'),
-  body('deviceId')
-    .optional()
-    .trim()
-    .isLength({ max: 100 })
-    .withMessage('Device ID must not exceed 100 characters'),
   auditLog('PUNCH_OUT')
 ], async (req, res) => {
   try {
@@ -200,7 +199,7 @@ router.post('/punch-out', [
     }
 
     // Find the active session (check-in without check-out)
-    const activeSessionIndex = attendance.sessions.findIndex(session => 
+    const activeSessionIndex = attendance.sessions.findIndex(session =>
       session.checkIn?.time && !session.checkOut?.time
     );
 
@@ -220,7 +219,6 @@ router.post('/punch-out', [
       deviceInfo: {
         userAgent: req.get('User-Agent'),
         ipAddress: req.ip,
-        deviceId: req.body.deviceId || ''
       },
       isEarly: false,
       earlyMinutes: 0
@@ -234,7 +232,7 @@ router.post('/punch-out', [
     const now = new Date();
     const standardEndTime = new Date(today);
     standardEndTime.setHours(18, 0, 0, 0);
-    
+
     if (now < standardEndTime) {
       activeSession.checkOut.isEarly = true;
       activeSession.checkOut.earlyMinutes = Math.round((standardEndTime - now) / (1000 * 60));
@@ -242,10 +240,10 @@ router.post('/punch-out', [
 
     // Update the attendance record
     attendance.sessions[activeSessionIndex] = activeSession;
-    
+
     // Recalculate work summary
     attendance.calculateWorkSummary();
-    
+
     // Determine overall status based on total work hours
     const minWorkHours = 8; // Configurable
     if (attendance.workSummary.effectiveHours >= minWorkHours) {
@@ -327,7 +325,7 @@ router.post('/break-start', [
     }
 
     // Check if there's an active session (check-in without check-out)
-    const hasActiveSession = attendance.sessions.some(session => 
+    const hasActiveSession = attendance.sessions.some(session =>
       session.checkIn?.time && !session.checkOut?.time
     );
 
@@ -420,7 +418,7 @@ router.post('/break-end', [
     ongoingBreak.duration = Math.round(
       ((ongoingBreak.endTime - ongoingBreak.startTime) / (1000 * 60)) * 100
     ) / 100; // Duration in minutes
-    
+
     if (notes) {
       ongoingBreak.notes = (ongoingBreak.notes || '') + ' ' + notes;
     }
@@ -461,7 +459,7 @@ router.get('/today', auth, async (req, res) => {
       userId,
       date: today
     });
-    
+
     // Get user details if attendance exists
     if (attendance) {
       const user = await User.findById(userId);
@@ -492,12 +490,12 @@ router.get('/today', auth, async (req, res) => {
     let currentStatus = 'not_punched_in';
     let ongoingBreak = null;
     let activeSession = null;
-    
+
     // Check if there's an active session (check-in without check-out)
-    const activeSessionIndex = attendance.sessions?.findIndex(session => 
+    const activeSessionIndex = attendance.sessions?.findIndex(session =>
       session.checkIn?.time && !session.checkOut?.time
     );
-    
+
     if (activeSessionIndex !== -1 && activeSessionIndex !== undefined) {
       activeSession = attendance.sessions[activeSessionIndex];
       const activeBreak = attendance.breaks?.find(b => b.startTime && !b.endTime);
@@ -509,7 +507,7 @@ router.get('/today', auth, async (req, res) => {
       }
     } else if (attendance.sessions && attendance.sessions.length > 0) {
       // Check if all sessions are completed
-      const allSessionsCompleted = attendance.sessions.every(session => 
+      const allSessionsCompleted = attendance.sessions.every(session =>
         session.checkIn?.time && session.checkOut?.time
       );
       if (allSessionsCompleted) {
@@ -568,16 +566,16 @@ router.get('/history', [
     } = req.query;
 
     const userId = req.user._id;
-    
+
     // Build filter
     const filter = { userId };
-    
+
     if (startDate || endDate) {
       filter.date = {};
       if (startDate) filter.date.$gte = new Date(startDate);
       if (endDate) filter.date.$lte = new Date(endDate);
     }
-    
+
     if (status) {
       filter.status = status;
     }
@@ -587,7 +585,7 @@ router.get('/history', [
 
     // Execute query with proper pagination
     const total = await Attendance.countDocuments(filter);
-    
+
     const attendanceRecords = await Attendance.find(filter)
       .sort({ date: -1 })
       .skip(skip)
@@ -597,7 +595,7 @@ router.get('/history', [
     // Process records to include user details and session information
     const processedRecords = attendanceRecords.map(record => {
       const recordObj = record.toObject();
-      
+
       // Add session summary
       recordObj.sessionSummary = {
         totalSessions: record.sessions?.length || 0,
@@ -606,7 +604,7 @@ router.get('/history', [
         firstCheckIn: record.sessions?.[0]?.checkIn?.time || null,
         lastCheckOut: record.sessions?.slice().reverse().find(s => s.checkOut?.time)?.checkOut?.time || null
       };
-      
+
       return recordObj;
     });
 
@@ -684,13 +682,13 @@ router.get('/team', [
       const attendance = attendanceRecords.find(
         record => record.userId._id.toString() === member._id.toString()
       );
-      
+
       let status = 'absent';
       let firstCheckIn = null;
       let lastCheckOut = null;
       let totalSessions = 0;
       let activeSessions = 0;
-      
+
       if (attendance) {
         status = attendance.status;
         totalSessions = attendance.sessions?.length || 0;
@@ -698,7 +696,7 @@ router.get('/team', [
         firstCheckIn = attendance.sessions?.[0]?.checkIn?.time || null;
         lastCheckOut = attendance.sessions?.slice().reverse().find(s => s.checkOut?.time)?.checkOut?.time || null;
       }
-      
+
       return {
         user: member,
         attendance: attendance || null,
@@ -767,7 +765,7 @@ router.get('/reports/summary', [
     }
 
     const { startDate, endDate, userId } = req.query;
-    
+
     // Build filter
     const filter = {
       date: {
@@ -783,7 +781,7 @@ router.get('/reports/summary', [
         department: req.user.department,
         isActive: true
       }).select('_id');
-      
+
       filter.userId = { $in: teamMembers.map(user => user._id) };
     }
 
@@ -833,7 +831,7 @@ router.put('/:id/approve', [
     const { notes } = req.body;
 
     const attendance = await Attendance.findById(attendanceId).populate('userId', 'firstName lastName email office department');
-    
+
     if (!attendance) {
       return res.status(404).json({
         success: false,
@@ -843,8 +841,8 @@ router.put('/:id/approve', [
 
     // Check if manager can approve this attendance
     if (req.user.role === USER_ROLES.MANAGER) {
-      if (attendance.userId.office !== req.user.office || 
-          attendance.userId.department !== req.user.department) {
+      if (attendance.userId.office !== req.user.office ||
+        attendance.userId.department !== req.user.department) {
         return res.status(403).json({
           success: false,
           message: 'You can only approve attendance for your team members'
@@ -859,7 +857,7 @@ router.put('/:id/approve', [
       validatedAt: new Date(),
       notes: notes || ''
     }, { new: true }).populate('userId', 'firstName lastName email office department');
-    
+
     if (!updatedAttendance) {
       return res.status(404).json({
         success: false,

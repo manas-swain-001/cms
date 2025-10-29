@@ -17,10 +17,6 @@ const sessionSchema = new mongoose.Schema({
         type: Number,
         default: null
       },
-      address: {
-        type: String,
-        default: ''
-      },
       accuracy: {
         type: Number,
         default: 0
@@ -44,10 +40,6 @@ const sessionSchema = new mongoose.Schema({
         type: String,
         default: ''
       },
-      deviceId: {
-        type: String,
-        default: ''
-      }
     },
     photo: {
       type: String,
@@ -76,10 +68,6 @@ const sessionSchema = new mongoose.Schema({
         type: Number,
         default: null
       },
-      address: {
-        type: String,
-        default: ''
-      },
       accuracy: {
         type: Number,
         default: 0
@@ -99,10 +87,6 @@ const sessionSchema = new mongoose.Schema({
         type: String,
         default: ''
       },
-      deviceId: {
-        type: String,
-        default: ''
-      }
     },
     photo: {
       type: String,
@@ -158,7 +142,6 @@ const attendanceSchema = new mongoose.Schema({
     location: {
       latitude: Number,
       longitude: Number,
-      address: String
     },
     notes: String
   }],
@@ -193,20 +176,6 @@ const attendanceSchema = new mongoose.Schema({
     enum: Object.values(ATTENDANCE_STATUS),
     default: ATTENDANCE_STATUS.PRESENT
   },
-  isValidated: {
-    type: Boolean,
-    default: false
-  },
-  validatedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    default: null
-  },
-  validatedAt: {
-    type: Date,
-    default: null
-  },
-
   // GPS Validation
   gpsValidation: {
     isValid: {
@@ -228,45 +197,6 @@ const attendanceSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-
-  // System Information
-  syncStatus: {
-    type: String,
-    enum: ['synced', 'pending', 'failed'],
-    default: 'synced'
-  },
-  lastSyncAt: {
-    type: Date,
-    default: Date.now
-  },
-
-  // Anomaly Detection
-  anomalies: [{
-    type: {
-      type: String,
-      enum: ['unusual_location', 'time_mismatch', 'device_change', 'duplicate_entry'],
-      required: true
-    },
-    description: String,
-    severity: {
-      type: String,
-      enum: ['low', 'medium', 'high'],
-      default: 'low'
-    },
-    detectedAt: {
-      type: Date,
-      default: Date.now
-    },
-    resolved: {
-      type: Boolean,
-      default: false
-    },
-    resolvedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    resolvedAt: Date
-  }]
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
