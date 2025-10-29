@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { ATTENDANCE_STATUS, ATTENDANCE_BREAK_TYPE, ATTENDANCE_METHOD } = require('../constant/enum');
+const { ATTENDANCE_STATUS, WORK_LOCATION, ATTENDANCE_BREAK_TYPE, ATTENDANCE_METHOD } = require('../constant/enum');
 
 const sessionSchema = new mongoose.Schema({
   checkIn: {
@@ -52,6 +52,16 @@ const sessionSchema = new mongoose.Schema({
     lateMinutes: {
       type: Number,
       default: 0
+    },
+    gpsValidation: {
+      distanceFromOffice: {
+        type: String,
+        default: '0 m'
+      },
+      withinRadius: {
+        type: Boolean,
+        default: true
+      }
     }
   },
   checkOut: {
@@ -99,9 +109,18 @@ const sessionSchema = new mongoose.Schema({
     earlyMinutes: {
       type: Number,
       default: 0
+    },
+    gpsValidation: {
+      distanceFromOffice: {
+        type: String,
+        default: '0 m'
+      },
+      withinRadius: {
+        type: Boolean,
+        default: true
+      }
     }
-  },
-  duration: { type: Number, default: 0 }
+  }
 });
 
 const attendanceSchema = new mongoose.Schema({
@@ -176,22 +195,11 @@ const attendanceSchema = new mongoose.Schema({
     enum: Object.values(ATTENDANCE_STATUS),
     default: ATTENDANCE_STATUS.PRESENT
   },
-  // GPS Validation
-  gpsValidation: {
-    isValid: {
-      type: Boolean,
-      default: true
-    },
-    distanceFromOffice: {
-      type: Number,
-      default: 0
-    },
-    withinRadius: {
-      type: Boolean,
-      default: true
-    }
+  workLocation: {
+    type: String,
+    enum: Object.values(WORK_LOCATION),
+    default: WORK_LOCATION.OFFICE
   },
-
   // Notes and Comments
   notes: {
     type: String,

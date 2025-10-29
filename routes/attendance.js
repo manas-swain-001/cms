@@ -1,10 +1,12 @@
 const express = require('express');
 const { body, validationResult, query } = require('express-validator');
+const ExcelJS = require('exceljs');
 const Attendance = require('../models/Attendance');
 const { User } = require('../models/User');
 const { Task } = require('../models/Task');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
-const { USER_ROLES, ATTENDANCE_STATUS } = require('../constant/enum');
+const { USER_ROLES, ATTENDANCE_STATUS, WORK_LOCATION } = require('../constant/enum');
+const { calculateDistance, formatDistance } = require('../utils/functions');
 
 const router = express.Router();
 
@@ -65,6 +67,23 @@ router.post('/punch-in', [
 
     console.log('Punch in :::: ', new Date());
 
+    // Calculate GPS distance from office
+    const distanceInMeters = calculateDistance(location);
+    const formattedDistance = formatDistance(distanceInMeters);
+    const withinRadius = distanceInMeters <= 1000; // Within 1km
+
+    // Determine if this is the first check-in of the day
+    const isFirstCheckIn = !existingAttendance || existingAttendance.sessions.length === 0;
+    
+    // Determine work location based on first check-in location
+    let workLocation = WORK_LOCATION.OFFICE;
+    if (isFirstCheckIn && !withinRadius) {
+      workLocation = WORK_LOCATION.HOME;
+    } else if (existingAttendance?.workLocation) {
+      // If already set, keep the existing work location
+      workLocation = existingAttendance.workLocation;
+    }
+
     // Create new attendance record or update existing one
     let attendance;
     const newSession = {
@@ -77,7 +96,11 @@ router.post('/punch-in', [
           ipAddress: req.ip,
         },
         isLate: false,
-        lateMinutes: 0
+        lateMinutes: 0,
+        gpsValidation: {
+          distanceFromOffice: formattedDistance,
+          withinRadius: withinRadius
+        }
       }
     };
 
@@ -97,7 +120,7 @@ router.post('/punch-in', [
         existingAttendance._id,
         {
           $push: { sessions: newSession },
-          status: 'present'
+          workLocation: workLocation
         },
         { new: true }
       );
@@ -107,7 +130,8 @@ router.post('/punch-in', [
         userId,
         date: today,
         sessions: [newSession],
-        status: 'present'
+        status: ATTENDANCE_STATUS.PRESENT,
+        workLocation: workLocation
       });
       attendance = await attendance.save();
     }
@@ -210,6 +234,11 @@ router.post('/punch-out', [
       });
     }
 
+    // Calculate GPS distance from office
+    const distanceInMeters = calculateDistance(location);
+    const formattedDistance = formatDistance(distanceInMeters);
+    const withinRadius = distanceInMeters <= 1000; // Within 1km
+
     // Update the active session with check-out
     const activeSession = attendance.sessions[activeSessionIndex];
     activeSession.checkOut = {
@@ -221,12 +250,23 @@ router.post('/punch-out', [
         ipAddress: req.ip,
       },
       isEarly: false,
-      earlyMinutes: 0
+      earlyMinutes: 0,
+      gpsValidation: {
+        distanceFromOffice: formattedDistance,
+        withinRadius: withinRadius
+      }
     };
 
-    // Calculate session duration
-    const sessionDuration = activeSession.checkOut.time - activeSession.checkIn.time;
-    activeSession.duration = Math.round((sessionDuration / (1000 * 60)) * 100) / 100; // Duration in minutes
+    // Recalculate work summary
+    attendance.calculateWorkSummary();
+
+    // Determine attendance status based on total work hours
+    const minWorkHours = 8; // Configurable
+    if (attendance.workSummary.effectiveHours >= minWorkHours) {
+      attendance.status = ATTENDANCE_STATUS.PRESENT;
+    } else {
+      attendance.status = ATTENDANCE_STATUS.PARTIAL;
+    }
 
     // Check if user is leaving early (assuming 6 PM is standard end time)
     const now = new Date();
@@ -240,17 +280,6 @@ router.post('/punch-out', [
 
     // Update the attendance record
     attendance.sessions[activeSessionIndex] = activeSession;
-
-    // Recalculate work summary
-    attendance.calculateWorkSummary();
-
-    // Determine overall status based on total work hours
-    const minWorkHours = 8; // Configurable
-    if (attendance.workSummary.effectiveHours >= minWorkHours) {
-      attendance.status = 'present';
-    } else {
-      attendance.status = 'partial';
-    }
 
     await attendance.save();
 
@@ -537,62 +566,177 @@ router.get('/today', auth, async (req, res) => {
   }
 });
 
-// @route   GET /api/attendance/history
-// @desc    Get attendance history with pagination
+// @route   GET /api/attendance/records
+// @desc    Get attendance records with pagination and filtering
 // @access  Private
-router.get('/history', [
-  auth,
-  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
-  query('startDate').optional().isISO8601().withMessage('Start date must be a valid date'),
-  query('endDate').optional().isISO8601().withMessage('End date must be a valid date')
-], async (req, res) => {
+router.get('/records', auth, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
+    // Get parameters from headers
+    const page = parseInt(req.headers['page']) || 1;
+    const limit = parseInt(req.headers['limit']) || 10;
+    const startDate = req.headers['start-date'];
+    const endDate = req.headers['end-date'];
+    const userId = req.headers['user-id']; // Single user ID
+
+    // Validate pagination
+    if (page < 1) {
       return res.status(400).json({
         success: false,
-        message: 'Validation failed',
-        errors: errors.array()
+        message: 'Page must be a positive integer'
       });
     }
 
-    const {
-      page = 1,
-      limit = 10,
-      startDate,
-      endDate,
-      status
-    } = req.query;
-
-    const userId = req.user._id;
-
-    // Build filter
-    const filter = { userId };
-
-    if (startDate || endDate) {
-      filter.date = {};
-      if (startDate) filter.date.$gte = new Date(startDate);
-      if (endDate) filter.date.$lte = new Date(endDate);
+    if (limit < 1 || limit > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Limit must be between 1 and 100'
+      });
     }
 
-    if (status) {
-      filter.status = status;
+    // Build filter
+    const filter = {};
+
+    // Helper function to parse date (supports DD/MM/YYYY and ISO8601 formats)
+    const parseDate = (dateStr) => {
+      if (!dateStr) return null;
+      
+      // Check if it's DD/MM/YYYY format
+      if (dateStr.includes('/')) {
+        const parts = dateStr.split('/');
+        if (parts.length === 3) {
+          const day = parseInt(parts[0]);
+          const month = parseInt(parts[1]) - 1; // Month is 0-indexed
+          const year = parseInt(parts[2]);
+          return new Date(year, month, day);
+        }
+      }
+      
+      // Otherwise, try ISO format or other standard formats
+      return new Date(dateStr);
+    };
+
+    // Date filtering
+    if (startDate || endDate) {
+      filter.date = {};
+      
+      let start = null;
+      let end = null;
+      
+      if (startDate) {
+        start = parseDate(startDate);
+        if (!start || isNaN(start.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid start date format. Use DD/MM/YYYY or ISO8601 format'
+          });
+        }
+        start.setHours(0, 0, 0, 0); // Start of day
+      }
+      
+      if (endDate) {
+        end = parseDate(endDate);
+        if (!end || isNaN(end.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid end date format. Use DD/MM/YYYY or ISO8601 format'
+          });
+        }
+        end.setHours(23, 59, 59, 999); // End of day
+      }
+      
+      // Validate: end date cannot be in the future
+      const today = new Date();
+      today.setHours(23, 59, 59, 999);
+      
+      if (end && end > today) {
+        return res.status(400).json({
+          success: false,
+          message: 'End date cannot be in the future'
+        });
+      }
+      
+      // Validate: end date cannot be before start date
+      if (start && end && end < start) {
+        return res.status(400).json({
+          success: false,
+          message: 'End date cannot be before start date'
+        });
+      }
+      
+      // Apply filters
+      if (start) {
+        filter.date.$gte = start;
+      }
+      if (end) {
+        filter.date.$lte = end;
+      }
+    }
+
+    // User filtering based on role and userId header
+    if (userId) {
+      // Specific user requested
+      if (req.user.role === USER_ROLES.ADMIN) {
+        // Admin can see any user
+        filter.userId = userId;
+      } else if (req.user.role === USER_ROLES.MANAGER) {
+        // Manager can only see users from their team
+        const teamMember = await User.findOne({
+          _id: userId,
+          office: req.user.office,
+          department: req.user.department,
+          isActive: true
+        }).select('_id');
+        
+        if (!teamMember) {
+          return res.status(403).json({
+            success: false,
+            message: 'You can only view attendance for your team members'
+          });
+        }
+        
+        filter.userId = userId;
+      } else {
+        // Regular employees can only see their own attendance
+        if (userId !== req.user._id.toString()) {
+          return res.status(403).json({
+            success: false,
+            message: 'You can only view your own attendance'
+          });
+        }
+        filter.userId = req.user._id;
+      }
+    } else {
+      // No specific user - get all accessible users
+      if (req.user.role === USER_ROLES.ADMIN) {
+        // Admin can see all users - no filter needed
+      } else if (req.user.role === USER_ROLES.MANAGER) {
+        // Manager can see their team
+        const teamMembers = await User.find({
+          office: req.user.office,
+          department: req.user.department,
+          isActive: true
+        }).select('_id');
+        
+        filter.userId = { $in: teamMembers.map(user => user._id) };
+      } else {
+        // Regular employees can only see their own
+        filter.userId = req.user._id;
+      }
     }
 
     // Pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const skip = (page - 1) * limit;
 
-    // Execute query with proper pagination
+    // Execute query with pagination
     const total = await Attendance.countDocuments(filter);
 
     const attendanceRecords = await Attendance.find(filter)
       .sort({ date: -1 })
       .skip(skip)
-      .limit(parseInt(limit))
+      .limit(limit)
       .populate('userId', 'firstName lastName email role office department');
 
-    // Process records to include user details and session information
+    // Process records to include session information
     const processedRecords = attendanceRecords.map(record => {
       const recordObj = record.toObject();
 
@@ -608,362 +752,516 @@ router.get('/history', [
       return recordObj;
     });
 
+    // Fill in missing dates with "absent" status (excluding Sundays)
+    let completeRecords = [...processedRecords];
+    
+    if (startDate && endDate) {
+      const start = parseDate(startDate);
+      const end = parseDate(endDate);
+      
+      if (start && end) {
+        // Generate all dates in range
+        const allDates = [];
+        const currentDate = new Date(start);
+        
+        while (currentDate <= end) {
+          const dateStr = currentDate.toISOString().split('T')[0];
+          const dayOfWeek = currentDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
+          
+          // Skip Sundays (0)
+          if (dayOfWeek !== 0) {
+            allDates.push({
+              dateStr,
+              date: new Date(currentDate)
+            });
+          }
+          
+          currentDate.setDate(currentDate.getDate() + 1);
+        }
+        
+        // Create a map of existing records by date
+        const recordMap = new Map();
+        processedRecords.forEach(record => {
+          const recordDateStr = new Date(record.date).toISOString().split('T')[0];
+          recordMap.set(recordDateStr, record);
+        });
+        
+        // Build complete records array with absent entries for missing dates
+        completeRecords = allDates.map(({ dateStr, date }) => {
+          if (recordMap.has(dateStr)) {
+            return recordMap.get(dateStr);
+          } else {
+            // Create absent entry
+            return {
+              date: date,
+              userId: userId ? { _id: userId } : null,
+              status: 'absent',
+              workLocation: null,
+              sessions: [],
+              breaks: [],
+              workSummary: {
+                totalHours: 0,
+                totalBreakTime: 0,
+                effectiveHours: 0,
+                overtime: 0,
+                undertime: 0
+              },
+              sessionSummary: {
+                totalSessions: 0,
+                completedSessions: 0,
+                activeSessions: 0,
+                firstCheckIn: null,
+                lastCheckOut: null
+              },
+              isAbsent: true
+            };
+          }
+        }).sort((a, b) => new Date(a.date) - new Date(b.date)); // Sort ascending by date
+      }
+    }
+
     // Calculate pagination info
-    const totalPages = Math.ceil(total / parseInt(limit));
+    const totalPages = Math.ceil(total / limit);
+
+    // Calculate summary statistics (including absent days)
+    const absentDays = completeRecords.filter(r => r.status === 'absent' || r.isAbsent).length;
+    const summary = {
+      totalRecords: completeRecords.length,
+      presentDays: attendanceRecords.filter(r => r.status === ATTENDANCE_STATUS.PRESENT).length,
+      partialDays: attendanceRecords.filter(r => r.status === ATTENDANCE_STATUS.PARTIAL).length,
+      absentDays: absentDays,
+      workFromHomeDays: attendanceRecords.filter(r => r.workLocation === WORK_LOCATION.HOME).length,
+      workFromOfficeDays: attendanceRecords.filter(r => r.workLocation === WORK_LOCATION.OFFICE).length,
+      totalWorkHours: attendanceRecords.reduce((sum, r) => sum + (r.workSummary?.totalHours || 0), 0),
+      totalEffectiveHours: attendanceRecords.reduce((sum, r) => sum + (r.workSummary?.effectiveHours || 0), 0),
+      totalOvertime: attendanceRecords.reduce((sum, r) => sum + (r.workSummary?.overtime || 0), 0),
+      totalSessions: attendanceRecords.reduce((sum, r) => sum + (r.sessions?.length || 0), 0)
+    };
 
     res.json({
       success: true,
       data: {
-        attendanceRecords: processedRecords,
+        attendanceRecords: completeRecords,
+        summary,
         pagination: {
-          currentPage: parseInt(page),
+          currentPage: page,
           totalPages,
           totalRecords: total,
-          hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1,
-          limit: parseInt(limit)
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+          limit
         }
       }
     });
   } catch (error) {
-    console.error('Get attendance history error:', error);
+    console.error('Get attendance records error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error while fetching attendance history'
+      message: 'Server error while fetching attendance records'
     });
   }
 });
 
-// @route   GET /api/attendance/team
-// @desc    Get team attendance (for managers)
-// @access  Private (Manager/Admin)
-router.get('/team', [
-  auth,
-  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
-  query('date').optional().isISO8601().withMessage('Date must be a valid date')
-], async (req, res) => {
+// @route   GET /api/attendance/export-excel
+// @desc    Export attendance records to Excel
+// @access  Private
+router.get('/export-excel', auth, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
+    // Get parameters from headers
+    const startDate = req.headers['start-date'];
+    const endDate = req.headers['end-date'];
+    const userId = req.headers['user-id'];
+
+    // Validate required parameters
+    if (!startDate || !endDate || !userId) {
       return res.status(400).json({
         success: false,
-        message: 'Validation failed',
-        errors: errors.array()
+        message: 'start-date, end-date, and user-id are required in headers'
       });
     }
 
-    const { date = new Date().toISOString().split('T')[0] } = req.query;
-    const targetDate = new Date(date);
-    targetDate.setHours(0, 0, 0, 0);
-
-    // Build filter based on user role
-    const userFilter = {};
-    if (req.user.role === USER_ROLES.MANAGER) {
-      userFilter.office = req.user.office;
-      userFilter.department = req.user.department;
-    }
-
-    // Get team members
-    const teamMembers = await User.find({
-      ...userFilter,
-      isActive: true,
-      _id: { $ne: req.user._id } // Exclude self
-    }).select('firstName lastName email role office department');
-
-    // Get attendance for team members
-    const teamIds = teamMembers.map(member => member._id);
-    const attendanceRecords = await Attendance.find({
-      userId: { $in: teamIds },
-      date: targetDate
-    }).populate('userId', 'firstName lastName email role office department');
-
-    // Combine team members with their attendance
-    const teamAttendance = teamMembers.map(member => {
-      const attendance = attendanceRecords.find(
-        record => record.userId._id.toString() === member._id.toString()
-      );
-
-      let status = 'absent';
-      let firstCheckIn = null;
-      let lastCheckOut = null;
-      let totalSessions = 0;
-      let activeSessions = 0;
-
-      if (attendance) {
-        status = attendance.status;
-        totalSessions = attendance.sessions?.length || 0;
-        activeSessions = attendance.sessions?.filter(s => s.checkIn?.time && !s.checkOut?.time).length || 0;
-        firstCheckIn = attendance.sessions?.[0]?.checkIn?.time || null;
-        lastCheckOut = attendance.sessions?.slice().reverse().find(s => s.checkOut?.time)?.checkOut?.time || null;
+    // Helper function to parse date (supports DD/MM/YYYY and ISO8601 formats)
+    const parseDate = (dateStr) => {
+      if (!dateStr) return null;
+      
+      // Check if it's DD/MM/YYYY format
+      if (dateStr.includes('/')) {
+        const parts = dateStr.split('/');
+        if (parts.length === 3) {
+          const day = parseInt(parts[0]);
+          const month = parseInt(parts[1]) - 1; // Month is 0-indexed
+          const year = parseInt(parts[2]);
+          return new Date(year, month, day);
+        }
       }
-
-      return {
-        user: member,
-        attendance: attendance || null,
-        status,
-        workingHours: attendance?.workSummary?.totalHours || 0,
-        effectiveHours: attendance?.workSummary?.effectiveHours || 0,
-        firstCheckIn,
-        lastCheckOut,
-        totalSessions,
-        activeSessions
-      };
-    });
-
-    // Calculate summary
-    const summary = {
-      totalTeamMembers: teamMembers.length,
-      present: teamAttendance.filter(ta => ta.status === 'present').length,
-      partial: teamAttendance.filter(ta => ta.status === 'partial').length,
-      absent: teamAttendance.filter(ta => ta.status === 'absent').length,
-      late: teamAttendance.filter(ta => {
-        if (!ta.attendance || !ta.firstCheckIn) return false;
-        const punchInTime = new Date(ta.firstCheckIn);
-        const expectedTime = new Date(targetDate);
-        expectedTime.setHours(9, 0, 0, 0); // 9 AM expected time
-        return punchInTime > expectedTime;
-      }).length,
-      activeSessions: teamAttendance.reduce((sum, ta) => sum + ta.activeSessions, 0),
-      totalSessions: teamAttendance.reduce((sum, ta) => sum + ta.totalSessions, 0)
+      
+      // Otherwise, try ISO format or other standard formats
+      return new Date(dateStr);
     };
 
-    res.json({
-      success: true,
-      data: {
-        date: targetDate,
-        teamAttendance,
-        summary
-      }
-    });
-  } catch (error) {
-    console.error('Get team attendance error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while fetching team attendance'
-    });
-  }
-});
+    // Parse dates
+    const start = parseDate(startDate);
+    const end = parseDate(endDate);
 
-// @route   GET /api/attendance/reports/summary
-// @desc    Get attendance summary report
-// @access  Private (Manager/Admin)
-router.get('/reports/summary', [
-  auth,
-  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
-  query('startDate').isISO8601().withMessage('Start date is required and must be valid'),
-  query('endDate').isISO8601().withMessage('End date is required and must be valid'),
-  query('userId').optional().isMongoId().withMessage('Invalid user ID')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
+    if (!start || isNaN(start.getTime())) {
       return res.status(400).json({
         success: false,
-        message: 'Validation failed',
-        errors: errors.array()
+        message: 'Invalid start date format. Use DD/MM/YYYY or ISO8601 format'
       });
     }
 
-    const { startDate, endDate, userId } = req.query;
+    if (!end || isNaN(end.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid end date format. Use DD/MM/YYYY or ISO8601 format'
+      });
+    }
 
-    // Build filter
-    const filter = {
-      date: {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      }
-    };
+    start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
 
-    // Role-based filtering
+    // Validate date range
+    if (end < start) {
+      return res.status(400).json({
+        success: false,
+        message: 'End date cannot be before start date'
+      });
+    }
+
+    // Check authorization - Admin can see all, Manager can see team, Employee can see own
+    if (req.user.role === USER_ROLES.EMPLOYEE && userId !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only export your own attendance'
+      });
+    }
+
     if (req.user.role === USER_ROLES.MANAGER) {
-      const teamMembers = await User.find({
+      const teamMember = await User.findOne({
+        _id: userId,
         office: req.user.office,
         department: req.user.department,
         isActive: true
       }).select('_id');
-
-      filter.userId = { $in: teamMembers.map(user => user._id) };
-    }
-
-    if (userId) {
-      filter.userId = userId;
-    }
-
-    // Get attendance summary
-    const summary = await Attendance.getAttendanceSummary(filter.userId, new Date(startDate), new Date(endDate));
-
-    res.json({
-      success: true,
-      data: {
-        period: { startDate, endDate },
-        summary
-      }
-    });
-  } catch (error) {
-    console.error('Get attendance summary error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while generating attendance summary'
-    });
-  }
-});
-
-// @route   PUT /api/attendance/:id/approve
-// @desc    Approve attendance record
-// @access  Private (Manager/Admin)
-router.put('/:id/approve', [
-  auth,
-  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
-  body('notes').optional().trim().isLength({ max: 500 }).withMessage('Notes must not exceed 500 characters'),
-  auditLog('APPROVE_ATTENDANCE')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const attendanceId = req.params.id;
-    const { notes } = req.body;
-
-    const attendance = await Attendance.findById(attendanceId).populate('userId', 'firstName lastName email office department');
-
-    if (!attendance) {
-      return res.status(404).json({
-        success: false,
-        message: 'Attendance record not found'
-      });
-    }
-
-    // Check if manager can approve this attendance
-    if (req.user.role === USER_ROLES.MANAGER) {
-      if (attendance.userId.office !== req.user.office ||
-        attendance.userId.department !== req.user.department) {
+      
+      if (!teamMember) {
         return res.status(403).json({
           success: false,
-          message: 'You can only approve attendance for your team members'
+          message: 'You can only export attendance for your team members'
         });
       }
     }
 
-    // Update approval status
-    const updatedAttendance = await Attendance.findByIdAndUpdate(attendanceId, {
-      isValidated: true,
-      validatedBy: req.user._id,
-      validatedAt: new Date(),
-      notes: notes || ''
-    }, { new: true }).populate('userId', 'firstName lastName email office department');
-
-    if (!updatedAttendance) {
+    // Get user details
+    const user = await User.findById(userId).select('firstName lastName email role office department');
+    if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'Failed to update attendance record'
+        message: 'User not found'
       });
     }
 
-    res.json({
-      success: true,
-      message: 'Attendance approved successfully',
-      data: { attendance: updatedAttendance }
-    });
-  } catch (error) {
-    console.error('Approve attendance error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while approving attendance'
-    });
-  }
-});
+    // Fetch attendance records
+    const attendanceRecords = await Attendance.find({
+      userId: userId,
+      date: {
+        $gte: start,
+        $lte: end
+      }
+    }).sort({ date: 1 });
 
-// @route   GET /api/attendance/sessions/:id
-// @desc    Get detailed session information
-// @access  Private
-router.get('/sessions/:id', auth, async (req, res) => {
-  try {
-    const attendanceId = req.params.id;
-    const userId = req.user._id;
-
-    const attendance = await Attendance.findOne({
-      _id: attendanceId,
-      userId
-    }).populate('userId', 'firstName lastName email role office department');
-
-    if (!attendance) {
-      return res.status(404).json({
-        success: false,
-        message: 'Attendance record not found'
-      });
+    // Generate all dates in range (excluding Sundays)
+    const allDates = [];
+    const currentDate = new Date(start);
+    
+    while (currentDate <= end) {
+      const dayOfWeek = currentDate.getDay(); // 0 = Sunday
+      
+      // Skip Sundays
+      if (dayOfWeek !== 0) {
+        allDates.push(new Date(currentDate));
+      }
+      
+      currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    // Get session summary
-    const sessionSummary = attendance.getSessionSummary();
-    const activeSession = attendance.getActiveSession();
-    const completedSessions = attendance.getCompletedSessions();
+    // Create a map of existing records by date
+    const recordMap = new Map();
+    attendanceRecords.forEach(record => {
+      const recordDateStr = new Date(record.date).toISOString().split('T')[0];
+      recordMap.set(recordDateStr, record);
+    });
 
-    res.json({
-      success: true,
-      data: {
-        attendance,
-        sessionSummary,
-        activeSession,
-        completedSessions,
-        isCurrentlyWorking: attendance.isCurrentlyWorking(),
-        isOnBreak: attendance.isOnBreak()
+    // Build complete data array with absent entries
+    const completeData = [];
+    let totalLateMinutes = 0;
+    let totalEarlyMinutes = 0;
+    let totalOfficeDays = 0;
+    let totalWFHDays = 0;
+    let totalPresentDays = 0;
+    let totalAbsentDays = 0;
+
+    allDates.forEach(date => {
+      const dateStr = date.toISOString().split('T')[0];
+      const record = recordMap.get(dateStr);
+
+      if (record) {
+        // Calculate check-in and check-out times
+        let checkInTime = null;
+        let checkOutTime = null;
+        let lateMinutes = 0;
+        let earlyMinutes = 0;
+
+        if (record.sessions && record.sessions.length > 0) {
+          // First session check-in
+          const firstSession = record.sessions[0];
+          if (firstSession.checkIn && firstSession.checkIn.time) {
+            checkInTime = new Date(firstSession.checkIn.time);
+            lateMinutes = firstSession.checkIn.lateMinutes || 0;
+          }
+
+          // Last session check-out
+          const lastSession = record.sessions[record.sessions.length - 1];
+          if (lastSession.checkOut && lastSession.checkOut.time) {
+            checkOutTime = new Date(lastSession.checkOut.time);
+            earlyMinutes = lastSession.checkOut.earlyMinutes || 0;
+          }
+        }
+
+        totalLateMinutes += lateMinutes;
+        totalEarlyMinutes += earlyMinutes;
+
+        if (record.workLocation === WORK_LOCATION.HOME) {
+          totalWFHDays++;
+        } else if (record.workLocation === WORK_LOCATION.OFFICE) {
+          totalOfficeDays++;
+        }
+
+        if (record.status === ATTENDANCE_STATUS.PRESENT || record.status === ATTENDANCE_STATUS.PARTIAL) {
+          totalPresentDays++;
+        }
+
+        completeData.push({
+          date: date,
+          checkIn: checkInTime,
+          checkOut: checkOutTime,
+          lateMinutes: lateMinutes,
+          earlyMinutes: earlyMinutes,
+          status: record.status || 'present',
+          workLocation: record.workLocation || 'office',
+          totalHours: record.workSummary?.totalHours || 0,
+          effectiveHours: record.workSummary?.effectiveHours || 0
+        });
+      } else {
+        // Absent day
+        totalAbsentDays++;
+        completeData.push({
+          date: date,
+          checkIn: null,
+          checkOut: null,
+          lateMinutes: 0,
+          earlyMinutes: 0,
+          status: 'absent',
+          workLocation: null,
+          totalHours: 0,
+          effectiveHours: 0
+        });
       }
     });
-  } catch (error) {
-    console.error('Get session details error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while fetching session details'
+
+    // Create Excel workbook
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Attendance Report');
+
+    // Set column widths
+    worksheet.columns = [
+      { key: 'date', width: 15 },
+      { key: 'checkIn', width: 20 },
+      { key: 'checkOut', width: 20 },
+      { key: 'totalHours', width: 15 },
+      { key: 'lateMinutes', width: 15 },
+      { key: 'earlyMinutes', width: 15 },
+      { key: 'status', width: 12 },
+      { key: 'workLocation', width: 15 }
+    ];
+
+    // Add title row
+    worksheet.mergeCells('A1:H1');
+    const titleRow = worksheet.getCell('A1');
+    titleRow.value = 'ATTENDANCE REPORT';
+    titleRow.font = { size: 16, bold: true };
+    titleRow.alignment = { horizontal: 'center', vertical: 'middle' };
+    titleRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    titleRow.font = { ...titleRow.font, color: { argb: 'FFFFFFFF' } };
+    worksheet.getRow(1).height = 30;
+
+    // Add employee info
+    worksheet.mergeCells('A2:B2');
+    worksheet.getCell('A2').value = 'Employee Name:';
+    worksheet.getCell('A2').font = { bold: true };
+    worksheet.mergeCells('C2:H2');
+    worksheet.getCell('C2').value = `${user.firstName} ${user.lastName}`;
+
+    worksheet.mergeCells('A3:B3');
+    worksheet.getCell('A3').value = 'Period:';
+    worksheet.getCell('A3').font = { bold: true };
+    worksheet.mergeCells('C3:H3');
+    worksheet.getCell('C3').value = `${startDate} to ${endDate}`;
+
+    // Add header row
+    const headerRow = worksheet.getRow(5);
+    headerRow.values = [
+      'Date',
+      'Check In',
+      'Check Out',
+      'Total Hours',
+      'Late (min)',
+      'Early (min)',
+      'Status',
+      'Location'
+    ];
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF70AD47' }
+    };
+    headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+    headerRow.height = 25;
+
+    // Add data rows
+    let rowIndex = 6;
+    completeData.forEach(data => {
+      const row = worksheet.getRow(rowIndex);
+      
+      // Format date as DD/MM/YYYY
+      const dateStr = `${String(data.date.getDate()).padStart(2, '0')}/${String(data.date.getMonth() + 1).padStart(2, '0')}/${data.date.getFullYear()}`;
+      
+      // Format time as HH:MM
+      const formatTime = (date) => {
+        if (!date) return '-';
+        return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+      };
+
+      row.values = [
+        dateStr,
+        formatTime(data.checkIn),
+        formatTime(data.checkOut),
+        data.totalHours > 0 ? data.totalHours.toFixed(2) : '-',
+        data.lateMinutes > 0 ? data.lateMinutes : '-',
+        data.earlyMinutes > 0 ? data.earlyMinutes : '-',
+        data.status.toUpperCase(),
+        data.workLocation ? data.workLocation.toUpperCase() : 'ABSENT'
+      ];
+
+      // Color code based on status
+      if (data.status === 'absent') {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFCCCC' }
+        };
+      } else if (data.workLocation === WORK_LOCATION.HOME) {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFE599' }
+        };
+      }
+
+      row.alignment = { horizontal: 'center', vertical: 'middle' };
+      rowIndex++;
     });
-  }
-});
 
-// @route   GET /api/attendance/stats
-// @desc    Get attendance statistics for user
-// @access  Private
-router.get('/stats', [
-  auth,
-  query('startDate').optional().isISO8601().withMessage('Start date must be a valid date'),
-  query('endDate').optional().isISO8601().withMessage('End date must be a valid date')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
+    // Add summary section
+    rowIndex += 1;
+    const summaryStartRow = rowIndex;
 
-    const userId = req.user._id;
-    const { startDate, endDate } = req.query;
+    worksheet.mergeCells(`A${rowIndex}:H${rowIndex}`);
+    const summaryTitleCell = worksheet.getCell(`A${rowIndex}`);
+    summaryTitleCell.value = 'SUMMARY';
+    summaryTitleCell.font = { size: 14, bold: true };
+    summaryTitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    summaryTitleCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    summaryTitleCell.font = { ...summaryTitleCell.font, color: { argb: 'FFFFFFFF' } };
+    worksheet.getRow(rowIndex).height = 25;
+    rowIndex++;
 
-    // Default to last 30 days if no dates provided
-    const end = endDate ? new Date(endDate) : new Date();
-    const start = startDate ? new Date(startDate) : new Date();
-    start.setDate(start.getDate() - 30);
+    // Summary data
+    const summaryData = [
+      ['Total Working Days:', allDates.length],
+      ['Total Present Days:', totalPresentDays],
+      ['Total Absent Days:', totalAbsentDays],
+      ['Total Office Days:', totalOfficeDays],
+      ['Total Work From Home Days:', totalWFHDays],
+      ['Total Late Minutes:', totalLateMinutes],
+      ['Total Early Minutes:', totalEarlyMinutes]
+    ];
 
-    const stats = await Attendance.getAttendanceStats(userId, start, end);
+    summaryData.forEach(([label, value]) => {
+      worksheet.mergeCells(`A${rowIndex}:D${rowIndex}`);
+      const labelCell = worksheet.getCell(`A${rowIndex}`);
+      labelCell.value = label;
+      labelCell.font = { bold: true };
+      labelCell.alignment = { horizontal: 'left', vertical: 'middle' };
 
-    res.json({
-      success: true,
-      data: {
-        period: { startDate: start, endDate: end },
-        stats
+      worksheet.mergeCells(`E${rowIndex}:H${rowIndex}`);
+      const valueCell = worksheet.getCell(`E${rowIndex}`);
+      valueCell.value = value;
+      valueCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      valueCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE7E6E6' }
+      };
+
+      rowIndex++;
+    });
+
+    // Add borders to all cells
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber >= 5) {
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+        });
       }
     });
+
+    // Generate filename
+    const fileName = `Attendance_${user.firstName}_${user.lastName}_${startDate.replace(/\//g, '-')}_to_${endDate.replace(/\//g, '-')}.xlsx`;
+
+    // Set response headers
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`
+    );
+
+    // Write to response
+    await workbook.xlsx.write(res);
+    res.end();
+
   } catch (error) {
-    console.error('Get attendance stats error:', error);
+    console.error('Export Excel error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error while fetching attendance statistics'
+      message: 'Server error while exporting attendance records'
     });
   }
 });

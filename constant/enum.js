@@ -19,11 +19,12 @@ const PERMISSIONS = Object.freeze({
 
 const ATTENDANCE_STATUS = Object.freeze({
     PRESENT: 'present',
-    PARTIAL: 'partial',
-    ABSENT: 'absent',
-    LEAVE: 'leave',
-    WORK_FROM_HOME: 'work_from_home',
-    HALF_DAY: 'half_day'
+    PARTIAL: 'partial'
+});
+
+const WORK_LOCATION = Object.freeze({
+    OFFICE: 'office',
+    HOME: 'home'
 });
 const ATTENDANCE_METHOD = Object.freeze({
     MANUAL: 'manual',
@@ -44,6 +45,7 @@ module.exports = {
     USER_ROLES,
     PERMISSIONS,
     ATTENDANCE_STATUS,
+    WORK_LOCATION,
     ATTENDANCE_METHOD,
     ATTENDANCE_BREAK_TYPE
 };
