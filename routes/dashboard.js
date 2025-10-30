@@ -2,7 +2,7 @@ const express = require('express');
 const { query, validationResult } = require('express-validator');
 const { User } = require('../models/User');
 const Attendance = require('../models/Attendance');
-const { Task } = require('../models/Task');
+const Task = require('../models/Task');
 const { auth, authorize } = require('../middleware/auth');
 const { USER_ROLES } = require('../constant/enum');
 
@@ -657,6 +657,214 @@ router.get('/performance-metrics', [
     res.status(500).json({
       success: false,
       message: 'Server error while fetching performance metrics'
+    });
+  }
+});
+
+// @route   GET /api/dashboard/employees-dropdown
+// @desc    Get all employees for dropdown (name and ID)
+// @access  Private (Admin/Manager)
+router.get('/employees-dropdown', [auth, authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER)], async (req, res) => {
+  try {
+    // Get all active employees (exclude admin role)
+    const employees = await User.find({
+      isActive: true,
+      role: { $ne: USER_ROLES.ADMIN }
+    })
+    .select('_id firstName lastName')
+    .sort({ firstName: 1, lastName: 1 })
+    .lean();
+
+    // Format for dropdown (only id and full name)
+    const employeeList = employees.map(emp => ({
+      id: emp._id,
+      name: `${emp.firstName} ${emp.lastName}`
+    }));
+
+    res.json({
+      success: true,
+      message: `Retrieved ${employeeList.length} employees`,
+      data: {
+        employees: employeeList,
+        total: employeeList.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Get employees dropdown error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching employees'
+    });
+  }
+});
+
+// @route   GET /api/dashboard/admin-overview
+// @desc    Get admin dashboard overview with attendance and task update statistics
+// @access  Private (Admin only)
+router.get('/admin-overview', [auth, authorize(USER_ROLES.ADMIN)], async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Get all active employees (exclude admin role)
+    const allEmployees = await User.find({ 
+      isActive: true,
+      role: { $ne: USER_ROLES.ADMIN }
+    }).select('_id');
+    const totalEmployees = allEmployees.length;
+    const employeeIds = allEmployees.map(emp => emp._id);
+
+    // Get today's attendance records
+    const todayAttendance = await Attendance.find({
+      userId: { $in: employeeIds },
+      date: today
+    }).populate('userId', 'firstName lastName employeeId');
+
+    // Calculate attendance statistics
+    const attendanceStats = {
+      total: totalEmployees,
+      presentAtOffice: 0,
+      workFromHome: 0,
+      late: 0,
+      absent: 0
+    };
+
+    const attendanceUserIds = new Set();
+
+    todayAttendance.forEach(attendance => {
+      attendanceUserIds.add(attendance.userId._id.toString());
+      
+      // Check if late (first session check-in after 9 AM)
+      const isLate = attendance.sessions && attendance.sessions.length > 0 && 
+                      attendance.sessions[0].checkIn && 
+                      attendance.sessions[0].checkIn.isLate;
+      
+      // Determine location (office vs WFH)
+      const isOffice = attendance.workLocation === 'office';
+      
+      if (isLate) {
+        attendanceStats.late++;
+      } else if (isOffice) {
+        attendanceStats.presentAtOffice++;
+      } else {
+        attendanceStats.workFromHome++;
+      }
+    });
+
+    // Calculate absent (those who haven't checked in at all)
+    attendanceStats.absent = totalEmployees - attendanceUserIds.size;
+
+    // Get today's tasks for all employees
+    const todayTasks = await Task.find({
+      userId: { $in: employeeIds },
+      date: today
+    }).populate('userId', 'firstName lastName employeeId email');
+
+    // Define time slots
+    const timeSlots = ['10:30', '12:00', '13:30', '16:00', '17:30'];
+    
+    // Calculate task update statistics for each time slot
+    const taskUpdateStats = timeSlots.map(slot => {
+      const slotStats = {
+        timeSlot: slot,
+        totalEmployees: 0,
+        submitted: 0,
+        pending: 0,
+        warningSent: 0,
+        escalated: 0,
+        submittedPercentage: 0,
+        notUpdatedPercentage: 0
+      };
+
+      todayTasks.forEach(task => {
+        const entry = task.scheduledEntries.find(e => e.scheduledTime === slot);
+        
+        if (entry) {
+          slotStats.totalEmployees++;
+          
+          switch (entry.status) {
+            case 'submitted':
+              slotStats.submitted++;
+              break;
+            case 'pending':
+              slotStats.pending++;
+              break;
+            case 'warning_sent':
+              slotStats.warningSent++;
+              break;
+            case 'escalated':
+              slotStats.escalated++;
+              break;
+          }
+        }
+      });
+
+      // Calculate percentages
+      if (slotStats.totalEmployees > 0) {
+        slotStats.submittedPercentage = ((slotStats.submitted / slotStats.totalEmployees) * 100).toFixed(1);
+        slotStats.notUpdatedPercentage = (((slotStats.pending + slotStats.warningSent + slotStats.escalated) / slotStats.totalEmployees) * 100).toFixed(1);
+      }
+
+      return slotStats;
+    });
+
+    // Get current time to determine which stats are relevant
+    const currentTime = new Date();
+    const currentHour = currentTime.getHours();
+    const currentMinute = currentTime.getMinutes();
+    const currentTotalMinutes = currentHour * 60 + currentMinute;
+
+    // Mark which time slots have passed
+    const enhancedTaskStats = taskUpdateStats.map(stat => {
+      const [hour, minute] = stat.timeSlot.split(':').map(Number);
+      const slotMinutes = hour * 60 + minute;
+      
+      return {
+        ...stat,
+        hasPassed: currentTotalMinutes > slotMinutes,
+        isActive: currentTotalMinutes >= slotMinutes - 30 && currentTotalMinutes <= slotMinutes + 30
+      };
+    });
+
+    // Overall summary
+    const summary = {
+      attendance: {
+        ...attendanceStats,
+        percentages: {
+          presentAtOffice: ((attendanceStats.presentAtOffice / totalEmployees) * 100).toFixed(1),
+          workFromHome: ((attendanceStats.workFromHome / totalEmployees) * 100).toFixed(1),
+          late: ((attendanceStats.late / totalEmployees) * 100).toFixed(1),
+          absent: ((attendanceStats.absent / totalEmployees) * 100).toFixed(1)
+        }
+      },
+      taskUpdates: {
+        byTimeSlot: enhancedTaskStats,
+        overall: {
+          totalSlots: timeSlots.length,
+          slotsWithData: enhancedTaskStats.filter(s => s.totalEmployees > 0).length,
+          averageCompletionRate: enhancedTaskStats.length > 0 
+            ? (enhancedTaskStats.reduce((sum, s) => sum + parseFloat(s.submittedPercentage || 0), 0) / enhancedTaskStats.length).toFixed(1)
+            : 0
+        }
+      }
+    };
+
+    res.json({
+      success: true,
+      message: 'Admin dashboard overview retrieved successfully',
+      data: {
+        date: today,
+        timestamp: new Date(),
+        summary
+      }
+    });
+
+  } catch (error) {
+    console.error('Get admin overview error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching admin overview'
     });
   }
 });

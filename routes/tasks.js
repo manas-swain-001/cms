@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { body, validationResult, query } = require('express-validator');
 const Task = require('../models/Task');
 const { User } = require('../models/User');
@@ -253,75 +254,160 @@ router.post('/submit-update', [
 });
 
 // @route   GET /api/tasks/history
-// @desc    Get task history for the current user
-// @access  Private
+// @desc    Get task history for a specific user (Admin only)
+// @access  Private (Admin only)
+// @headers user-id, page, limit, start-date (dd/mm/yyyy), end-date (dd/mm/yyyy)
 router.get('/history', [
   auth,
-  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
-  query('startDate').optional().isISO8601().withMessage('Start date must be a valid date'),
-  query('endDate').optional().isISO8601().withMessage('End date must be a valid date')
+  authorize(USER_ROLES.ADMIN)
 ], async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
+    // Get parameters from headers
+    const userId = req.headers['user-id'];
+    const page = req.headers['page'] || '1';
+    const limit = req.headers['limit'] || '10';
+    const startDate = req.headers['start-date']; // dd/mm/yyyy
+    const endDate = req.headers['end-date']; // dd/mm/yyyy
+
+    // Validate userId
+    if (!userId) {
       return res.status(400).json({
         success: false,
-        message: 'Validation failed',
-        errors: errors.array()
+        message: 'user-id header is required'
       });
     }
 
-    const {
-      page = 1,
-      limit = 10,
-      startDate,
-      endDate
-    } = req.query;
+    // Validate userId format
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user-id format'
+      });
+    }
 
-    const userId = req.user._id;
+    // Validate pagination
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
     
+    if (isNaN(pageNum) || pageNum < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'page must be a positive integer'
+      });
+    }
+
+    if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'limit must be between 1 and 100'
+      });
+    }
+
+    // Verify user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Parse dates from dd/mm/yyyy format
+    const parseDateDDMMYYYY = (dateStr) => {
+      if (!dateStr) return null;
+      const parts = dateStr.split('/');
+      if (parts.length !== 3) return null;
+      
+      const day = parseInt(parts[0]);
+      const month = parseInt(parts[1]) - 1; // Month is 0-indexed
+      const year = parseInt(parts[2]);
+      
+      if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+      if (day < 1 || day > 31 || month < 0 || month > 11 || year < 1900) return null;
+      
+      return new Date(year, month, day);
+    };
+
     // Build date filter
     let dateFilter = {};
-    if (startDate || endDate) {
-      dateFilter = {
-        $gte: startDate ? new Date(startDate) : undefined,
-        $lte: endDate ? new Date(endDate) : undefined
-      };
-      // Remove undefined values
-      Object.keys(dateFilter).forEach(key => dateFilter[key] === undefined && delete dateFilter[key]);
+    if (startDate) {
+      const parsedStartDate = parseDateDDMMYYYY(startDate);
+      if (!parsedStartDate) {
+        return res.status(400).json({
+          success: false,
+          message: 'start-date must be in dd/mm/yyyy format'
+        });
+      }
+      parsedStartDate.setHours(0, 0, 0, 0);
+      dateFilter.$gte = parsedStartDate;
+    }
+
+    if (endDate) {
+      const parsedEndDate = parseDateDDMMYYYY(endDate);
+      if (!parsedEndDate) {
+        return res.status(400).json({
+          success: false,
+          message: 'end-date must be in dd/mm/yyyy format'
+        });
+      }
+      parsedEndDate.setHours(23, 59, 59, 999);
+      dateFilter.$lte = parsedEndDate;
     }
 
     // Get tasks with pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
     
-    const tasks = await Task.find({
-      userId,
+    const query = {
+      userId: userId,
       ...(Object.keys(dateFilter).length > 0 && { date: dateFilter })
-    })
-    .sort({ date: -1 })
-    .skip(skip)
-    .limit(parseInt(limit));
+    };
 
-    const total = await Task.countDocuments({
-      userId,
-      ...(Object.keys(dateFilter).length > 0 && { date: dateFilter })
-    });
+    const tasks = await Task.find(query)
+      .sort({ date: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .select('-__v')
+      .lean();
+
+    const total = await Task.countDocuments(query);
 
     // Calculate pagination info
-    const totalPages = Math.ceil(total / parseInt(limit));
+    const totalPages = Math.ceil(total / limitNum);
+
+    // Format response - clean task data
+    const formattedTasks = tasks.map(task => ({
+      _id: task._id,
+      date: task.date.toISOString().split('T')[0],
+      scheduledEntries: task.scheduledEntries.map(entry => ({
+        _id: entry._id,
+        scheduledTime: entry.scheduledTime,
+        status: entry.status,
+        description: entry.description,
+        submittedAt: entry.submittedAt,
+        createdAt: entry.createdAt
+      })),
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt
+    }));
 
     res.json({
       success: true,
+      message: `Retrieved ${tasks.length} task records for ${user.firstName} ${user.lastName}`,
       data: {
-        tasks,
+        user: {
+          id: user._id,
+          name: `${user.firstName} ${user.lastName}`,
+          employeeId: user.employeeId,
+          email: user.email
+        },
+        tasks: formattedTasks,
         pagination: {
-          currentPage: parseInt(page),
+          currentPage: pageNum,
           totalPages,
           totalRecords: total,
-          hasNextPage: parseInt(page) < totalPages,
-          hasPrevPage: parseInt(page) > 1,
-          limit: parseInt(limit)
+          hasNextPage: pageNum < totalPages,
+          hasPrevPage: pageNum > 1,
+          limit: limitNum
         }
       }
     });
@@ -330,88 +416,6 @@ router.get('/history', [
     res.status(500).json({
       success: false,
       message: 'Server error while fetching task history'
-    });
-  }
-});
-
-// @route   GET /api/tasks/user/:userId
-// @desc    Get tasks for a specific user (for managers)
-// @access  Private (Manager/Admin)
-router.get('/user/:userId', [
-  auth,
-  authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER),
-  query('startDate').optional().isISO8601().withMessage('Start date must be a valid date'),
-  query('endDate').optional().isISO8601().withMessage('End date must be a valid date')
-], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const { userId } = req.params;
-    const { startDate, endDate } = req.query;
-
-    // Check if user exists
-    const user = await User.findById(userId).select('firstName lastName email employeeId office department');
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    // Check permissions for managers
-    if (req.user.role === USER_ROLES.MANAGER) {
-      if (user.office !== req.user.office || 
-          (req.user.department && user.department !== req.user.department)) {
-        return res.status(403).json({
-          success: false,
-          message: 'You can only view tasks for your team members'
-        });
-      }
-    }
-
-    // Build date filter
-    let dateFilter = {};
-    if (startDate || endDate) {
-      dateFilter = {
-        $gte: startDate ? new Date(startDate) : undefined,
-        $lte: endDate ? new Date(endDate) : undefined
-      };
-      Object.keys(dateFilter).forEach(key => dateFilter[key] === undefined && delete dateFilter[key]);
-    }
-
-    // Get user tasks
-    const tasks = await Task.find({
-      userId,
-      ...(Object.keys(dateFilter).length > 0 && { date: dateFilter })
-    }).sort({ date: -1 });
-
-    res.json({
-      success: true,
-      data: {
-        user: {
-          _id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          employeeId: user.employeeId,
-          office: user.office,
-          department: user.department
-        },
-        tasks
-      }
-    });
-  } catch (error) {
-    console.error('Get user tasks error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while fetching user tasks'
     });
   }
 });
