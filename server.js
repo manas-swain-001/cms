@@ -16,8 +16,12 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    // origin: process.env.FRONTEND_URL || 'http://localhost:4028',
-    origin: '*',
+    origin: [
+      'http://localhost:4028',
+      'http://localhost:3000',
+      'https://cms-ui-three.vercel.app',
+      process.env.FRONTEND_URL
+    ].filter(Boolean),
     methods: ['GET', 'POST'],
     credentials: true
   },
@@ -57,9 +61,17 @@ app.use(helmet({
 }));
 
 app.use(cors({
-  // origin: process.env.FRONTEND_URL || 'http://localhost:4028',
-  origin: '*',
-  credentials: true
+  origin: [
+    'http://localhost:4028',
+    'http://localhost:3000',
+    'https://cms-ui-three.vercel.app',
+    process.env.FRONTEND_URL
+  ].filter(Boolean),
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'user-id', 'page', 'limit', 'start-date', 'end-date'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 600 // Cache preflight for 10 minutes
 }));
 
 // Rate limiting
