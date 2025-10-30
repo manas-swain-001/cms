@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Missed Update Notification</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f4f4f4;">
+    <table role="presentation" style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td style="padding: 20px 0;">
+                <table role="presentation" style="width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 30px 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px 8px 0 0;">
+                            <h2 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 600;">SmartXAlgo CRM</h2>
+                            <p style="margin: 5px 0 0; color: #f0f0f0; font-size: 14px;">Attendance & Update Notification</p>
+                        </td>
+                    </tr>
+                    
+                    <!-- Body -->
+                    <tr>
+                        <td style="padding: 40px;">
+                            <h3 style="margin: 0 0 20px; color: #333333; font-size: 20px;">Hi {{name}},</h3>
+                            
+                            <p style="margin: 0 0 15px; color: #666666; font-size: 16px; line-height: 1.6;">
+                                You missed your <strong style="color: #d32f2f;">{{time}}</strong> update on <strong style="color: #333333;">{{date}}</strong>.
+                            </p>
+                            
+                            <div style="margin: 25px 0; padding: 20px; background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
+                                <p style="margin: 0; color: #856404; font-size: 14px; line-height: 1.5;">
+                                    <strong>⚠️ Action Required:</strong><br>
+                                    Please inform your manager immediately about this missed update.
+                                </p>
+                            </div>
+                            
+                            <p style="margin: 20px 0 0; color: #666666; font-size: 16px; line-height: 1.6;">
+                                Regards,<br>
+                                <strong style="color: #333333;">HR Team</strong><br>
+                                <span style="color: #999999; font-size: 14px;">SmartXAlgo</span>
+                            </p>
+                        </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 20px 40px; background-color: #f8f9fa; border-radius: 0 0 8px 8px; border-top: 1px solid #e9ecef;">
+                            <p style="margin: 0; color: #999999; font-size: 12px; line-height: 1.5; text-align: center;">
+                                This is an automated notification from SmartXAlgo CRM.<br>
+                                Please do not reply to this email.
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+

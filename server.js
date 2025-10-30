@@ -36,6 +36,10 @@ const socketHandler = new SocketHandler(io);
 const smsCronJob = require('./cron/smsCron');
 // smsCronJob.start();
 
+// Initialize Task Update Monitoring Cron Jobs
+const taskUpdateCron = require('./cron/taskUpdateCron');
+taskUpdateCron.start();
+
 // Make socket handler available to routes
 app.set('socketHandler', socketHandler);
 
@@ -125,6 +129,7 @@ app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/sms', require('./routes/sms'));
 app.use('/api/cron', require('./routes/cron'));
+app.use('/api/email', require('./routes/email'));
 
 // WebSocket status endpoint
 app.get('/api/websocket/status', (req, res) => {
@@ -241,6 +246,7 @@ server.listen(PORT, () => {
     console.log(`   Attendance: http://localhost:${PORT}/api/attendance`);
     console.log(`   Tasks: http://localhost:${PORT}/api/tasks`);
     console.log(`   Dashboard: http://localhost:${PORT}/api/dashboard`);
+    console.log(`   Email: http://localhost:${PORT}/api/email`);
     console.log(`   WebSocket: ws://localhost:${PORT}`);
   }
 });

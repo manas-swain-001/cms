@@ -1,6 +1,6 @@
 const express = require('express');
 const { body, validationResult, query } = require('express-validator');
-const { Task } = require('../models/Task');
+const Task = require('../models/Task');
 const { User } = require('../models/User');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
 const { USER_ROLES } = require('../constant/enum');
@@ -39,6 +39,78 @@ router.get('/today', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error while fetching today\'s tasks'
+    });
+  }
+});
+
+// @route   GET /api/tasks/completed-updates
+// @desc    Get only completed, warned, or escalated updates for today (excludes pending)
+// @access  Private
+router.get('/completed-updates', auth, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Find today's task
+    const task = await Task.findOne({
+      userId: userId,
+      date: today
+    });
+
+    // If no task found, return empty array
+    if (!task) {
+      return res.json({
+        success: true,
+        message: 'No tasks found for today',
+        data: {
+          updates: [],
+          total: 0
+        }
+      });
+    }
+
+    // Filter only non-pending entries (submitted, warning_sent, escalated)
+    const completedUpdates = task.scheduledEntries.filter(entry => 
+      entry.status === 'submitted' || 
+      entry.status === 'warning_sent' || 
+      entry.status === 'escalated'
+    );
+
+    // If all are pending, return empty array
+    if (completedUpdates.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No completed, warned, or escalated updates yet',
+        data: {
+          updates: [],
+          total: 0
+        }
+      });
+    }
+
+    // Return only the filtered entries
+    res.json({
+      success: true,
+      message: `Found ${completedUpdates.length} update(s)`,
+      data: {
+        updates: completedUpdates.map(entry => ({
+          scheduledTime: entry.scheduledTime,
+          status: entry.status,
+          description: entry.description,
+          submittedAt: entry.submittedAt,
+          createdAt: entry.createdAt
+        })),
+        total: completedUpdates.length,
+        taskId: task._id,
+        date: task.date
+      }
+    });
+  } catch (error) {
+    console.error('Get completed updates error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching completed updates'
     });
   }
 });
@@ -83,27 +155,46 @@ router.post('/submit-update', [
     const currentMinute = currentTime.getMinutes();
     const currentTimeString = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
     
-    // Determine which time slot the current time falls into
-    let targetScheduledTime = null;
+    // Calculate total minutes from midnight for easier comparison
+    const currentTotalMinutes = currentHour * 60 + currentMinute;
     
-    if (currentHour < 10 || (currentHour === 10 && currentMinute < 30)) {
-      // Before 10:30 - should update 10:30 slot
+    // Define allowed time windows and their target slots
+    let targetScheduledTime = null;
+    let isValidTimeWindow = false;
+    
+    // Before 10:30 to 11:00 → update 10:30 slot
+    if (currentTotalMinutes < 11 * 60) { // Before 11:00 AM
       targetScheduledTime = '10:30';
-    } else if (currentHour < 12 || (currentHour === 12 && currentMinute === 0)) {
-      // Between 10:30 and 12:00 - should update 10:30 slot
-      targetScheduledTime = '10:30';
-    } else if (currentHour < 13 || (currentHour === 13 && currentMinute < 30)) {
-      // Between 12:00 and 13:30 - should update 12:00 slot
+      isValidTimeWindow = true;
+    }
+    // 11:30 to 12:30 → update 12:00 slot
+    else if (currentTotalMinutes >= 11 * 60 + 30 && currentTotalMinutes <= 12 * 60 + 30) { // 11:30 to 12:30
       targetScheduledTime = '12:00';
-    } else if (currentHour < 16 || (currentHour === 16 && currentMinute === 0)) {
-      // Between 13:30 and 16:00 - should update 13:30 slot
+      isValidTimeWindow = true;
+    }
+    // 01:00 PM to 02:00 PM (13:00 to 14:00) → update 01:30 PM (13:30) slot
+    else if (currentTotalMinutes >= 13 * 60 && currentTotalMinutes <= 14 * 60) { // 13:00 to 14:00
       targetScheduledTime = '13:30';
-    } else if (currentHour < 17 || (currentHour === 17 && currentMinute < 30)) {
-      // Between 16:00 and 17:30 - should update 16:00 slot
+      isValidTimeWindow = true;
+    }
+    // 03:30 PM to 04:30 PM (15:30 to 16:30) → update 04:00 PM (16:00) slot
+    else if (currentTotalMinutes >= 15 * 60 + 30 && currentTotalMinutes <= 16 * 60 + 30) { // 15:30 to 16:30
       targetScheduledTime = '16:00';
-    } else {
-      // After 17:30 - should update 17:30 slot
+      isValidTimeWindow = true;
+    }
+    // 05:00 PM to 06:00 PM (17:00 to 18:00) → update 05:30 PM (17:30) slot
+    else if (currentTotalMinutes >= 17 * 60 && currentTotalMinutes <= 18 * 60) { // 17:00 to 18:00
       targetScheduledTime = '17:30';
+      isValidTimeWindow = true;
+    }
+    
+    // Check if current time is within any allowed window
+    if (!isValidTimeWindow) {
+      return res.status(400).json({
+        success: false,
+        message: 'Updates can only be submitted during specific time windows: Before 11:00 AM, 11:30 AM-12:30 PM, 1:00 PM-2:00 PM, 3:30 PM-4:30 PM, or 5:00 PM-6:00 PM',
+        currentTime: currentTimeString
+      });
     }
 
     // Find the target entry

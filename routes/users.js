@@ -78,10 +78,7 @@ router.post('/save', [
     .withMessage('ZIP code cannot exceed 20 characters'),
   body('accNo')
     .optional()
-    .trim()
-    .isLength({ min: 8, max: 20 })
-    .matches(/^[A-Z0-9]{8,20}$/)
-    .withMessage('Account number must be 8-20 characters long and contain only uppercase letters and numbers'),
+    .trim(),
   body('salary')
     .optional()
     .isNumeric()

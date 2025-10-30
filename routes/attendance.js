@@ -3,7 +3,7 @@ const { body, validationResult, query } = require('express-validator');
 const ExcelJS = require('exceljs');
 const Attendance = require('../models/Attendance');
 const { User } = require('../models/User');
-const { Task } = require('../models/Task');
+const Task = require('../models/Task');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
 const { USER_ROLES, ATTENDANCE_STATUS, WORK_LOCATION } = require('../constant/enum');
 const { calculateDistance, formatDistance } = require('../utils/functions');
@@ -82,6 +82,75 @@ router.post('/punch-in', [
     } else if (existingAttendance?.workLocation) {
       // If already set, keep the existing work location
       workLocation = existingAttendance.workLocation;
+    }
+
+    // Create tasks for first check-in of the day
+    if (isFirstCheckIn) {
+      try {
+        console.log('First check-in detected, creating update tasks...');
+        const currentTime = new Date();
+        const currentHour = currentTime.getHours();
+        const currentMinute = currentTime.getMinutes();
+        const currentTotalMinutes = currentHour * 60 + currentMinute;
+
+        console.log(`Current time: ${currentHour}:${currentMinute} (${currentTotalMinutes} minutes)`);
+
+        // Define scheduled update times
+        const scheduledTimes = ['10:30', '12:00', '13:30', '16:00', '17:30'];
+        const tasksToCreate = [];
+
+        // Create tasks for times that haven't passed yet
+        for (const timeSlot of scheduledTimes) {
+          const [hour, minute] = timeSlot.split(':').map(Number);
+          const slotTotalMinutes = hour * 60 + minute;
+
+          console.log(`Checking time slot ${timeSlot} (${slotTotalMinutes} minutes): ${currentTotalMinutes < slotTotalMinutes ? 'INCLUDE' : 'SKIP'}`);
+
+          // Only create task if the time hasn't passed yet
+          if (currentTotalMinutes < slotTotalMinutes) {
+            tasksToCreate.push({
+              scheduledTime: timeSlot,
+              status: 'pending',
+              description: '',
+              createdAt: new Date()
+            });
+          }
+        }
+
+        console.log(`Tasks to create: ${tasksToCreate.length}`, tasksToCreate.map(t => t.scheduledTime));
+
+        // Check if task record already exists for today
+        const existingTask = await Task.findOne({
+          userId: userId,
+          date: today
+        });
+
+        console.log(`Existing task found: ${existingTask ? 'YES' : 'NO'}`);
+
+        if (existingTask) {
+          // Update existing task with new scheduled entries
+          existingTask.scheduledEntries.push(...tasksToCreate);
+          await existingTask.save();
+          console.log(`Added ${tasksToCreate.length} update tasks for user ${userId}`);
+        } else if (tasksToCreate.length > 0) {
+          // Create new task record with scheduled entries
+          const newTask = new Task({
+            userId: userId,
+            date: today,
+            scheduledEntries: tasksToCreate
+          });
+          await newTask.save();
+          console.log(`Created ${tasksToCreate.length} update tasks for user ${userId}`);
+        } else {
+          console.log('No tasks to create (all time slots have passed)');
+        }
+      } catch (taskError) {
+        console.error('Error creating update tasks (continuing anyway):', taskError.message);
+        console.error('Full error:', taskError);
+        // Don't fail check-in if task creation fails
+      }
+    } else {
+      console.log('Not first check-in, skipping task creation');
     }
 
     // Create new attendance record or update existing one

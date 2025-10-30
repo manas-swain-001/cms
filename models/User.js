@@ -66,8 +66,7 @@ const userSchema = new mongoose.Schema({
     required: false, // Made optional for existing users
     trim: true,
     unique: true,
-    sparse: true, // Allows multiple null values for unique constraint
-    match: [/^[A-Z0-9]{8,20}$/, 'Account number must be 8-20 characters long and contain only uppercase letters and numbers']
+    sparse: true // Allows multiple null values for unique constraint
   },
   salary: {
     type: Number,

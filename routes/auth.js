@@ -6,6 +6,7 @@ const { User } = require('../models/User');
 const { auth } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 const { USER_ROLES } = require('../constant/enum');
+const emailService = require('../shared/emailService');
 
 const router = express.Router();
 
@@ -59,6 +60,9 @@ router.post('/register', [
       });
     }
 
+    // Store plain password before it gets hashed by the model
+    const plainPassword = password;
+
     // Create new user
     const user = new User({
       firstName,
@@ -88,6 +92,18 @@ router.post('/register', [
     const userResponse = user.toObject();
     delete userResponse.password;
     delete userResponse.refreshTokens;
+
+    // Send welcome email AFTER successful registration (won't crash if fails)
+    try {
+      const emailResult = await emailService.sendWelcomeEmail(email, plainPassword);
+      if (emailResult.success) {
+        console.log('Welcome email sent to:', email);
+      } else {
+        console.warn('Failed to send welcome email:', emailResult.error);
+      }
+    } catch (emailError) {
+      console.error('Error sending welcome email (continuing anyway):', emailError.message);
+    }
 
     res.status(201).json({
       success: true,
