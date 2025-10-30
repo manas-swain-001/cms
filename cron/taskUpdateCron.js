@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const Task = require('../models/Task');
+const { getTodayIST } = require('../utils/dateUtils');
 
 class TaskUpdateCron {
   constructor() {
@@ -129,8 +130,7 @@ class TaskUpdateCron {
    */
   async checkPendingUpdates(scheduledTime) {
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const today = getTodayIST();
 
       // Find all tasks for today with pending status for the specific time slot
       const tasks = await Task.find({
@@ -178,8 +178,7 @@ class TaskUpdateCron {
    */
   async sendWarnings(scheduledTime) {
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const today = getTodayIST();
 
       // Find all tasks with pending status for the specific time slot
       const tasks = await Task.find({
@@ -232,8 +231,7 @@ class TaskUpdateCron {
    */
   async escalateMissed(scheduledTime) {
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const today = getTodayIST();
 
       // Find all tasks with warning_sent status for the specific time slot
       const tasks = await Task.find({

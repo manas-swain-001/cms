@@ -5,6 +5,13 @@ const Task = require('../models/Task');
 const { User } = require('../models/User');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
 const { USER_ROLES } = require('../constant/enum');
+const { 
+  getCurrentISTTime, 
+  getISTStartOfDay,
+  getTodayIST,
+  parseDateDDMMYYYY,
+  getCurrentISTHourMinute
+} = require('../utils/dateUtils');
 
 const router = express.Router();
 
@@ -50,8 +57,7 @@ router.get('/today', auth, async (req, res) => {
 router.get('/completed-updates', auth, async (req, res) => {
   try {
     const userId = req.user._id;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
     // Find today's task
     const task = await Task.findOne({
@@ -151,9 +157,8 @@ router.post('/submit-update', [
     }
 
     // Auto-determine which scheduled entry to update based on current time
-    const currentTime = new Date();
-    const currentHour = currentTime.getHours();
-    const currentMinute = currentTime.getMinutes();
+    const currentTime = getCurrentISTTime();
+    const { hour: currentHour, minute: currentMinute } = getCurrentISTHourMinute();
     const currentTimeString = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
     
     // Calculate total minutes from midnight for easier comparison
@@ -183,8 +188,8 @@ router.post('/submit-update', [
       targetScheduledTime = '16:00';
       isValidTimeWindow = true;
     }
-    // 05:00 PM to 06:00 PM (17:00 to 18:00) → update 05:30 PM (17:30) slot
-    else if (currentTotalMinutes >= 17 * 60 && currentTotalMinutes <= 18 * 60) { // 17:00 to 18:00
+    // 05:00 PM to 05:30 PM (17:00 to 17:30) → update 05:30 PM (17:30) slot (office ends at 5:30 PM)
+    else if (currentTotalMinutes >= 17 * 60 && currentTotalMinutes <= 17 * 60 + 30) { // 17:00 to 17:30
       targetScheduledTime = '17:30';
       isValidTimeWindow = true;
     }
@@ -193,7 +198,7 @@ router.post('/submit-update', [
     if (!isValidTimeWindow) {
       return res.status(400).json({
         success: false,
-        message: 'Updates can only be submitted during specific time windows: Before 11:00 AM, 11:30 AM-12:30 PM, 1:00 PM-2:00 PM, 3:30 PM-4:30 PM, or 5:00 PM-6:00 PM',
+        message: 'Updates can only be submitted during specific time windows: Before 11:00 AM, 11:30 AM-12:30 PM, 1:00 PM-2:00 PM, 3:30 PM-4:30 PM, or 5:00 PM-5:30 PM (Office hours: 9:00 AM - 5:30 PM IST)',
         currentTime: currentTimeString
       });
     }
@@ -227,7 +232,7 @@ router.post('/submit-update', [
     // Submit the update
     targetEntry.status = 'submitted';
     targetEntry.description = description.trim();
-    targetEntry.submittedAt = new Date();
+    targetEntry.submittedAt = getCurrentISTTime();
 
     await task.save();
 
@@ -239,7 +244,7 @@ router.post('/submit-update', [
         submittedEntry: {
           scheduledTime: targetScheduledTime,
           description: description.trim(),
-          submittedAt: new Date(),
+          submittedAt: getCurrentISTTime(),
           currentTime: currentTimeString
         }
       }
@@ -312,23 +317,7 @@ router.get('/history', [
       });
     }
 
-    // Parse dates from dd/mm/yyyy format
-    const parseDateDDMMYYYY = (dateStr) => {
-      if (!dateStr) return null;
-      const parts = dateStr.split('/');
-      if (parts.length !== 3) return null;
-      
-      const day = parseInt(parts[0]);
-      const month = parseInt(parts[1]) - 1; // Month is 0-indexed
-      const year = parseInt(parts[2]);
-      
-      if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
-      if (day < 1 || day > 31 || month < 0 || month > 11 || year < 1900) return null;
-      
-      return new Date(year, month, day);
-    };
-
-    // Build date filter
+    // Build date filter using IST
     let dateFilter = {};
     if (startDate) {
       const parsedStartDate = parseDateDDMMYYYY(startDate);
@@ -338,7 +327,7 @@ router.get('/history', [
           message: 'start-date must be in dd/mm/yyyy format'
         });
       }
-      parsedStartDate.setHours(0, 0, 0, 0);
+      // parseDateDDMMYYYY already returns IST date at start of day
       dateFilter.$gte = parsedStartDate;
     }
 
@@ -350,6 +339,7 @@ router.get('/history', [
           message: 'end-date must be in dd/mm/yyyy format'
         });
       }
+      // Set to end of day in IST
       parsedEndDate.setHours(23, 59, 59, 999);
       dateFilter.$lte = parsedEndDate;
     }

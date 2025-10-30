@@ -167,7 +167,7 @@ const userSchema = new mongoose.Schema({
       },
       end: {
         type: String,
-        default: '18:00'
+        default: '17:30'
       }
     },
     workingDays: [{

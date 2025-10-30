@@ -5,6 +5,12 @@ const Attendance = require('../models/Attendance');
 const Task = require('../models/Task');
 const { auth, authorize } = require('../middleware/auth');
 const { USER_ROLES } = require('../constant/enum');
+const { 
+  getCurrentISTTime, 
+  getISTStartOfDay,
+  getTodayIST,
+  getCurrentISTHourMinute
+} = require('../utils/dateUtils');
 
 const router = express.Router();
 
@@ -14,13 +20,13 @@ const router = express.Router();
 router.get('/overview', auth, async (req, res) => {
   try {
     const userId = req.user._id;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
-    const startOfWeek = new Date(today);
+    const startOfWeek = getISTStartOfDay();
     startOfWeek.setDate(today.getDate() - today.getDay());
 
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const startOfMonth = getISTStartOfDay();
+    startOfMonth.setDate(1);
 
     // Get today's attendance
     const todayAttendance = await Attendance.findOne({
@@ -97,8 +103,7 @@ router.get('/overview', auth, async (req, res) => {
 // @access  Private (Manager/Admin)
 router.get('/team-overview', [auth, authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER)], async (req, res) => {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
     // Build filter based on user role
     const userFilter = {};
@@ -207,8 +212,7 @@ router.get('/attendance-widget', [
 
     const { period = 'week' } = req.query;
     const userId = req.user._id;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
     // Calculate date range
     const startDate = new Date(today);
@@ -297,8 +301,7 @@ router.get('/task-compliance-widget', [
 
     const { period = 'week' } = req.query;
     const userId = req.user._id;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
     // Calculate date range
     const startDate = new Date(today);
@@ -376,8 +379,7 @@ router.get('/task-compliance-widget', [
 // @access  Private (Admin/Manager)
 router.get('/system-health', [auth, authorize(USER_ROLES.ADMIN, USER_ROLES.MANAGER)], async (req, res) => {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
     // Get system metrics
     const [totalUsers, activeUsers, todayAttendance, todayTasks] = await Promise.all([
@@ -704,8 +706,7 @@ router.get('/employees-dropdown', [auth, authorize(USER_ROLES.ADMIN, USER_ROLES.
 // @access  Private (Admin only)
 router.get('/admin-overview', [auth, authorize(USER_ROLES.ADMIN)], async (req, res) => {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
     // Get all active employees (exclude admin role)
     const allEmployees = await User.find({ 
@@ -810,10 +811,8 @@ router.get('/admin-overview', [auth, authorize(USER_ROLES.ADMIN)], async (req, r
     });
 
     // Get current time to determine which stats are relevant
-    const currentTime = new Date();
-    const currentHour = currentTime.getHours();
-    const currentMinute = currentTime.getMinutes();
-    const currentTotalMinutes = currentHour * 60 + currentMinute;
+    const currentTime = getCurrentISTTime();
+    const { hour: currentHour, minute: currentMinute, totalMinutes: currentTotalMinutes } = getCurrentISTHourMinute();
 
     // Mark which time slots have passed
     const enhancedTaskStats = taskUpdateStats.map(stat => {

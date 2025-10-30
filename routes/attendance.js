@@ -7,6 +7,14 @@ const Task = require('../models/Task');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
 const { USER_ROLES, ATTENDANCE_STATUS, WORK_LOCATION } = require('../constant/enum');
 const { calculateDistance, formatDistance } = require('../utils/functions');
+const { 
+  getCurrentISTTime, 
+  getISTStartOfDay, 
+  getISTEndOfDay,
+  parseDateDDMMYYYY,
+  getCurrentISTHourMinute,
+  getTodayIST
+} = require('../utils/dateUtils');
 
 const router = express.Router();
 
@@ -44,8 +52,20 @@ router.post('/punch-in', [
 
     const userId = req.user._id;
     const { location, notes } = req.body;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
+
+    // Check if current time is after 5:30 PM IST
+    const { hour: currentHour, minute: currentMinute } = getCurrentISTHourMinute();
+    const currentTotalMinutes = currentHour * 60 + currentMinute;
+    const cutoffTime = 17 * 60 + 30; // 5:30 PM = 17:30 in 24-hour format
+
+    if (currentTotalMinutes > cutoffTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'Check-in not allowed after 5:30 PM. Please contact your manager if you need to mark attendance.',
+        currentTime: `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`
+      });
+    }
 
     // Check if user already punched in today and has an active session
     const existingAttendance = await Attendance.findOne({
@@ -88,9 +108,8 @@ router.post('/punch-in', [
     if (isFirstCheckIn) {
       try {
         console.log('First check-in detected, creating update tasks...');
-        const currentTime = new Date();
-        const currentHour = currentTime.getHours();
-        const currentMinute = currentTime.getMinutes();
+        const currentTime = getCurrentISTTime();
+        const { hour: currentHour, minute: currentMinute } = getCurrentISTHourMinute();
         const currentTotalMinutes = currentHour * 60 + currentMinute;
 
         console.log(`Current time: ${currentHour}:${currentMinute} (${currentTotalMinutes} minutes)`);
@@ -173,10 +192,10 @@ router.post('/punch-in', [
       }
     };
 
-    // Check if user is late (assuming 9 AM is standard start time)
-    const now = new Date();
-    const standardStartTime = new Date(today);
-    standardStartTime.setHours(9, 0, 0, 0);
+    // Check if user is late (office hours: 9:00 AM to 5:30 PM IST)
+    const now = getCurrentISTTime();
+    const standardStartTime = getISTStartOfDay();
+    standardStartTime.setHours(9, 0, 0, 0); // 9:00 AM IST
 
     if (now > standardStartTime) {
       newSession.checkIn.isLate = true;
@@ -275,8 +294,7 @@ router.post('/punch-out', [
 
     const userId = req.user._id;
     const { location, notes } = req.body;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
     // Find today's attendance record
     const attendance = await Attendance.findOne({
@@ -337,10 +355,10 @@ router.post('/punch-out', [
       attendance.status = ATTENDANCE_STATUS.PARTIAL;
     }
 
-    // Check if user is leaving early (assuming 6 PM is standard end time)
-    const now = new Date();
-    const standardEndTime = new Date(today);
-    standardEndTime.setHours(18, 0, 0, 0);
+    // Check if user is leaving early (office hours: 9:00 AM to 5:30 PM IST)
+    const now = getCurrentISTTime();
+    const standardEndTime = getISTStartOfDay();
+    standardEndTime.setHours(17, 30, 0, 0); // 5:30 PM IST
 
     if (now < standardEndTime) {
       activeSession.checkOut.isEarly = true;
@@ -406,8 +424,7 @@ router.post('/break-start', [
 
     const userId = req.user._id;
     const { breakType, notes } = req.body;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
     // Find today's attendance record
     const attendance = await Attendance.findOne({
@@ -486,8 +503,7 @@ router.post('/break-end', [
   try {
     const userId = req.user._id;
     const { notes } = req.body;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
     // Find today's attendance record
     const attendance = await Attendance.findOne({
@@ -550,8 +566,7 @@ router.post('/break-end', [
 router.get('/today', auth, async (req, res) => {
   try {
     const userId = req.user._id;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = getTodayIST();
 
     const attendance = await Attendance.findOne({
       userId,
@@ -665,24 +680,8 @@ router.get('/records', auth, async (req, res) => {
     // Build filter
     const filter = {};
 
-    // Helper function to parse date (supports DD/MM/YYYY and ISO8601 formats)
-    const parseDate = (dateStr) => {
-      if (!dateStr) return null;
-      
-      // Check if it's DD/MM/YYYY format
-      if (dateStr.includes('/')) {
-        const parts = dateStr.split('/');
-        if (parts.length === 3) {
-          const day = parseInt(parts[0]);
-          const month = parseInt(parts[1]) - 1; // Month is 0-indexed
-          const year = parseInt(parts[2]);
-          return new Date(year, month, day);
-        }
-      }
-      
-      // Otherwise, try ISO format or other standard formats
-      return new Date(dateStr);
-    };
+    // Use IST date parser
+    const parseDate = parseDateDDMMYYYY;
 
     // Date filtering
     if (startDate || endDate) {
@@ -714,8 +713,7 @@ router.get('/records', auth, async (req, res) => {
       }
       
       // Validate: end date cannot be in the future
-      const today = new Date();
-      today.setHours(23, 59, 59, 999);
+      const today = getISTEndOfDay();
       
       if (end && end > today) {
         return res.status(400).json({
@@ -949,24 +947,8 @@ router.get('/export-excel', auth, async (req, res) => {
       });
     }
 
-    // Helper function to parse date (supports DD/MM/YYYY and ISO8601 formats)
-    const parseDate = (dateStr) => {
-      if (!dateStr) return null;
-      
-      // Check if it's DD/MM/YYYY format
-      if (dateStr.includes('/')) {
-        const parts = dateStr.split('/');
-        if (parts.length === 3) {
-          const day = parseInt(parts[0]);
-          const month = parseInt(parts[1]) - 1; // Month is 0-indexed
-          const year = parseInt(parts[2]);
-          return new Date(year, month, day);
-        }
-      }
-      
-      // Otherwise, try ISO format or other standard formats
-      return new Date(dateStr);
-    };
+    // Use IST date parser
+    const parseDate = parseDateDDMMYYYY;
 
     // Parse dates
     const start = parseDate(startDate);
