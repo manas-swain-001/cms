@@ -20,6 +20,7 @@ const io = socketIo(server, {
       'http://localhost:4028',
       'http://localhost:3000',
       'https://cms-ui-three.vercel.app',
+      'https://cms.smartxalgo.com',
       process.env.FRONTEND_URL
     ].filter(Boolean),
     methods: ['GET', 'POST'],
@@ -65,6 +66,7 @@ app.use(cors({
     'http://localhost:4028',
     'http://localhost:3000',
     'https://cms-ui-three.vercel.app',
+    'https://cms.smartxalgo.com',
     process.env.FRONTEND_URL
   ].filter(Boolean),
   credentials: true,
