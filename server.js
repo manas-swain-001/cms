@@ -45,8 +45,14 @@ const smsCronJob = require('./cron/smsCron');
 const taskUpdateCron = require('./cron/taskUpdateCron');
 taskUpdateCron.start();
 
-// Make socket handler available to routes
+// Initialize Task Update Notification Cron Jobs
+const TaskNotificationCron = require('./cron/taskNotificationCron');
+const taskNotificationCron = new TaskNotificationCron(socketHandler);
+taskNotificationCron.start();
+
+// Make socket handler and task notification cron available to routes
 app.set('socketHandler', socketHandler);
+app.set('taskNotificationCron', taskNotificationCron);
 
 // Security middleware
 app.use(helmet({

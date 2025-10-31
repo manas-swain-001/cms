@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const { User } = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Task = require('../models/Task');
 const { USER_ROLES } = require('../constant/enum');
@@ -74,7 +74,10 @@ class SocketHandler {
 
   async authenticateSocket(socket, next) {
     try {
-      const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
+      // Try to get token from multiple sources (auth object, headers, or query params)
+      const token = socket.handshake.auth.token 
+        || socket.handshake.headers.authorization?.replace('Bearer ', '')
+        || socket.handshake.query.token;
       
       if (!token) {
         return next(new Error('Authentication token required'));

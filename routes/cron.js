@@ -182,4 +182,55 @@ router.post('/task-update/escalate', [
   }
 });
 
+// @route   POST /api/cron/task-notification/test
+// @desc    Manually trigger task update notification (for testing only - uses current time)
+// @access  Private (Admin only)
+router.post('/task-notification/test', [
+  auth,
+  authorize(USER_ROLES.ADMIN)
+], async (req, res) => {
+  try {
+    // Get taskNotificationCron instance from app settings
+    const taskNotificationCron = req.app.get('taskNotificationCron');
+    
+    if (!taskNotificationCron) {
+      return res.status(500).json({
+        success: false,
+        message: 'Task notification cron not initialized'
+      });
+    }
+
+    // Get current IST time and format as HH:MM
+    const { getCurrentISTTime } = require('../utils/dateUtils');
+    const currentTime = getCurrentISTTime();
+    const hours = currentTime.getHours().toString().padStart(2, '0');
+    const minutes = currentTime.getMinutes().toString().padStart(2, '0');
+    const currentTimeString = `${hours}:${minutes}`;
+
+    console.log(`🧪 Manual test trigger: Sending task notification with current time ${currentTimeString}`);
+    
+    // Trigger the notification - broadcasts to all connected users
+    await taskNotificationCron.sendTaskUpdateNotification(currentTimeString);
+    
+    const connectedUsers = taskNotificationCron.socketHandler.getConnectedUsers().length;
+    
+    res.json({
+      success: true,
+      message: `✅ Task update notification sent to ${connectedUsers} connected user(s)`,
+      data: {
+        currentTime: currentTimeString,
+        connectedUsers: connectedUsers,
+        notificationSent: true
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error in manual task notification test:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while sending test notification',
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;
