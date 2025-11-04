@@ -5,8 +5,8 @@ const Task = require('../models/Task');
 const { User } = require('../models/User');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
 const { USER_ROLES } = require('../constant/enum');
-const { 
-  getCurrentISTTime, 
+const {
+  getCurrentISTTime,
   getISTStartOfDay,
   getTodayIST,
   parseDateDDMMYYYY,
@@ -15,22 +15,43 @@ const {
 
 const router = express.Router();
 
+function parseISTDateRange(startDateStr, endDateStr) {
+  const [sd, sm, sy] = startDateStr ? startDateStr.split('/') : [];
+  const [ed, em, ey] = endDateStr ? endDateStr.split('/') : [];
+
+  let start, end;
+
+  if (sd && sm && sy) {
+    // Interpret start as IST midnight, convert to UTC
+    const startIST = new Date(`${sy}-${sm}-${sd}T00:00:00+05:30`);
+    start = new Date(startIST.toISOString());
+  }
+
+  if (ed && em && ey) {
+    // Interpret end as IST 23:59:59, convert to UTC
+    const endIST = new Date(`${ey}-${em}-${ed}T23:59:59+05:30`);
+    end = new Date(endIST.toISOString());
+  }
+
+  return { start, end };
+}
+
 // @route   GET /api/tasks/today
 // @desc    Get today's task for the current user
 // @access  Private
 router.get('/today', auth, async (req, res) => {
   try {
     const userId = req.user._id;
-    
+
     // Get or create today's task
     const task = await Task.createOrGetTodayTask(userId);
-    
+
     // Populate user details
     const user = await User.findById(userId).select('firstName lastName email employeeId office');
-    
+
     res.json({
       success: true,
-      data: { 
+      data: {
         task,
         user: {
           _id: user._id,
@@ -78,9 +99,9 @@ router.get('/completed-updates', auth, async (req, res) => {
     }
 
     // Filter only non-pending entries (submitted, warning_sent, escalated)
-    const completedUpdates = task.scheduledEntries.filter(entry => 
-      entry.status === 'submitted' || 
-      entry.status === 'warning_sent' || 
+    const completedUpdates = task.scheduledEntries.filter(entry =>
+      entry.status === 'submitted' ||
+      entry.status === 'warning_sent' ||
       entry.status === 'escalated'
     );
 
@@ -148,7 +169,7 @@ router.post('/submit-update', [
 
     // Get today's task
     const task = await Task.getTodayTask(userId);
-    
+
     if (!task) {
       return res.status(404).json({
         success: false,
@@ -160,14 +181,14 @@ router.post('/submit-update', [
     const currentTime = getCurrentISTTime();
     const { hour: currentHour, minute: currentMinute } = getCurrentISTHourMinute();
     const currentTimeString = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
-    
+
     // Calculate total minutes from midnight for easier comparison
     const currentTotalMinutes = currentHour * 60 + currentMinute;
-    
+
     // Define allowed time windows and their target slots
     let targetScheduledTime = null;
     let isValidTimeWindow = false;
-    
+
     // Before 10:30 to 11:00 → update 10:30 slot
     if (currentTotalMinutes < 11 * 60) { // Before 11:00 AM
       targetScheduledTime = '10:30';
@@ -193,7 +214,7 @@ router.post('/submit-update', [
       targetScheduledTime = '17:30';
       isValidTimeWindow = true;
     }
-    
+
     // Check if current time is within any allowed window
     if (!isValidTimeWindow) {
       return res.status(400).json({
@@ -205,10 +226,10 @@ router.post('/submit-update', [
 
     // Find the target entry
     const targetEntry = task.scheduledEntries.find(entry => entry.scheduledTime === targetScheduledTime);
-    
+
     if (!targetEntry) {
       return res.status(404).json({
-      success: false,
+        success: false,
         message: `No scheduled entry found for ${targetScheduledTime}. Please check your punch-in time.`
       });
     }
@@ -239,7 +260,7 @@ router.post('/submit-update', [
     res.json({
       success: true,
       message: `Update submitted successfully for ${targetScheduledTime}`,
-      data: { 
+      data: {
         task,
         submittedEntry: {
           scheduledTime: targetScheduledTime,
@@ -267,14 +288,14 @@ router.get('/history', [
   authorize(USER_ROLES.ADMIN)
 ], async (req, res) => {
   try {
-    // Get parameters from headers
+    // ---- 1. Extract headers ----
     const userId = req.headers['user-id'];
     const page = req.headers['page'] || '1';
     const limit = req.headers['limit'] || '10';
     const startDate = req.headers['start-date']; // dd/mm/yyyy
     const endDate = req.headers['end-date']; // dd/mm/yyyy
 
-    // Validate userId
+    // ---- 2. Validate userId ----
     if (!userId) {
       return res.status(400).json({
         success: false,
@@ -282,7 +303,6 @@ router.get('/history', [
       });
     }
 
-    // Validate userId format
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({
         success: false,
@@ -290,10 +310,10 @@ router.get('/history', [
       });
     }
 
-    // Validate pagination
+    // ---- 3. Validate pagination ----
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
-    
+
     if (isNaN(pageNum) || pageNum < 1) {
       return res.status(400).json({
         success: false,
@@ -308,7 +328,7 @@ router.get('/history', [
       });
     }
 
-    // Verify user exists
+    // ---- 4. Verify user exists ----
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -317,36 +337,21 @@ router.get('/history', [
       });
     }
 
-    // Build date filter using IST
+    // ---- 5. Build date filter (IST input → UTC conversion) ----
     let dateFilter = {};
-    if (startDate) {
-      const parsedStartDate = parseDateDDMMYYYY(startDate);
-      if (!parsedStartDate) {
-        return res.status(400).json({
-          success: false,
-          message: 'start-date must be in dd/mm/yyyy format'
-        });
-      }
-      // parseDateDDMMYYYY already returns IST date at start of day
-      dateFilter.$gte = parsedStartDate;
+    if (startDate || endDate) {
+      const { start, end } = parseISTDateRange(startDate, endDate);
+      if (start) dateFilter.$gte = start;
+      if (end) dateFilter.$lte = end;
     }
 
-    if (endDate) {
-      const parsedEndDate = parseDateDDMMYYYY(endDate);
-      if (!parsedEndDate) {
-        return res.status(400).json({
-          success: false,
-          message: 'end-date must be in dd/mm/yyyy format'
-        });
-      }
-      // Set to end of day in IST
-      parsedEndDate.setHours(23, 59, 59, 999);
-      dateFilter.$lte = parsedEndDate;
-    }
+    // Debug log (optional)
+    console.log('📅 Final UTC Date Filter:', JSON.stringify(dateFilter, null, 2));
 
-    // Get tasks with pagination
+    // ---- 6. Pagination ----
     const skip = (pageNum - 1) * limitNum;
-    
+
+    // ---- 7. Query Mongo ----
     const query = {
       userId: userId,
       ...(Object.keys(dateFilter).length > 0 && { date: dateFilter })
@@ -360,15 +365,13 @@ router.get('/history', [
       .lean();
 
     const total = await Task.countDocuments(query);
-
-    // Calculate pagination info
     const totalPages = Math.ceil(total / limitNum);
 
-    // Format response - clean task data
+    // ---- 8. Format tasks ----
     const formattedTasks = tasks.map(task => ({
       _id: task._id,
-      date: task.date.toISOString().split('T')[0],
-      scheduledEntries: task.scheduledEntries.map(entry => ({
+      date: task.date.toISOString().split('T')[0], // keep YYYY-MM-DD
+      scheduledEntries: (task.scheduledEntries || []).map(entry => ({
         _id: entry._id,
         scheduledTime: entry.scheduledTime,
         status: entry.status,
@@ -380,9 +383,10 @@ router.get('/history', [
       updatedAt: task.updatedAt
     }));
 
+    // ---- 9. Response ----
     res.json({
       success: true,
-      message: `Retrieved ${tasks.length} task records for ${user.firstName} ${user.lastName}`,
+      message: `Retrieved ${tasks.length} task record(s) for ${user.firstName} ${user.lastName}`,
       data: {
         user: {
           id: user._id,
@@ -401,8 +405,9 @@ router.get('/history', [
         }
       }
     });
+
   } catch (error) {
-    console.error('Get task history error:', error);
+    console.error('❌ Get task history error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error while fetching task history'
