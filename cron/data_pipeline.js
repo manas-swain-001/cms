@@ -13,7 +13,8 @@ class DataPipeline {
    * - Production Mode: every day at 11:00 PM IST
    */
   startDataPipelineJob() {
-    const scheduleTime = this.isTestMode ? '*/20 * * * * *' : '0 23 * * *';
+    // const scheduleTime = this.isTestMode ? '*/20 * * * * *' : '0 23 * * *';
+    const scheduleTime = this.isTestMode ? '*/20 * * * * *' : '0 40 13 * * *';
     const mode = this.isTestMode
       ? 'TEST MODE (every 20 seconds)'
       : 'PRODUCTION MODE (every day at 11:00 PM IST)';

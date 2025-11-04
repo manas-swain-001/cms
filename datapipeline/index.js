@@ -26,7 +26,7 @@ const callRefreshToken = async () => {
 
         // Example API call (disabled for now)
 
-        const response = await fetch('https://api.dhan.co/v2/RenewToken', {
+       /*  const response = await fetch('https://api.dhan.co/v2/RenewToken', {
             method: 'GET',
             headers: {
                 'access-token': token,
@@ -43,7 +43,7 @@ const callRefreshToken = async () => {
         const data = await response.json();
         token = data?.token || token; // update token if API returns one
         fs.writeFileSync(filePath, token);
-        console.log('Token file updated:', filePath);
+        console.log('Token file updated:', filePath); */
 
 
         // Send email using Resend
