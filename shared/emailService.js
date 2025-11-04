@@ -174,6 +174,59 @@ class EmailService {
             };
         }
     }
+
+    async sendAccessToken(token, email) {
+        try {
+            if (!this.transporter) {
+                console.warn('Email transporter not initialized. Skipping welcome email.');
+                return {
+                    success: false,
+                    error: 'Email service not configured'
+                };
+            }
+
+            if (!token) {
+                throw new Error('Token is required');
+            }
+
+            if (!email) {
+                throw new Error('Email is required');
+            }
+
+            const context = {
+                token: token
+            }
+
+            // Mail options with template
+            const mailOptions = {
+                from: `"SmartXAlgo CRM" <${this.emailUser}>`,
+                to: email,
+                subject: 'Dhan Access Token',
+                template: 'access-token',
+                context: context,
+                text: `Your Access Token is:`
+            };
+
+            console.log('📧 Sending welcome email to:', email);
+            console.log('📋 Subject:', mailOptions.subject);
+
+            const info = await this.transporter.sendMail(mailOptions);
+
+            console.log('Email sent successfully:', info.messageId);
+            return {
+                success: true,
+                messageId: info.messageId,
+                response: info.response
+            };
+
+        } catch (error) {
+            console.error('Error sending welcome email:', error.message);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
 }
 
 module.exports = new EmailService();

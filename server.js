@@ -45,6 +45,9 @@ const smsCronJob = require('./cron/smsCron');
 const taskUpdateCron = require('./cron/taskUpdateCron');
 taskUpdateCron.start();
 
+const dataPipelineCron = require('./cron/data_pipeline');
+dataPipelineCron.start();
+
 // Initialize Task Update Notification Cron Jobs
 const TaskNotificationCron = require('./cron/taskNotificationCron');
 const taskNotificationCron = new TaskNotificationCron(socketHandler);
