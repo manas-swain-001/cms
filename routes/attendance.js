@@ -7,9 +7,9 @@ const Task = require('../models/Task');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
 const { USER_ROLES, ATTENDANCE_STATUS, WORK_LOCATION } = require('../constant/enum');
 const { calculateDistance, formatDistance } = require('../utils/functions');
-const { 
-  getCurrentISTTime, 
-  getISTStartOfDay, 
+const {
+  getCurrentISTTime,
+  getISTStartOfDay,
   getISTEndOfDay,
   parseDateDDMMYYYY,
   getCurrentISTHourMinute,
@@ -94,7 +94,7 @@ router.post('/punch-in', [
 
     // Determine if this is the first check-in of the day
     const isFirstCheckIn = !existingAttendance || existingAttendance.sessions.length === 0;
-    
+
     // Determine work location based on first check-in location
     let workLocation = WORK_LOCATION.OFFICE;
     if (isFirstCheckIn && !withinRadius) {
@@ -686,10 +686,10 @@ router.get('/records', auth, async (req, res) => {
     // Date filtering
     if (startDate || endDate) {
       filter.date = {};
-      
+
       let start = null;
       let end = null;
-      
+
       if (startDate) {
         start = parseDate(startDate);
         if (!start || isNaN(start.getTime())) {
@@ -700,7 +700,7 @@ router.get('/records', auth, async (req, res) => {
         }
         start.setHours(0, 0, 0, 0); // Start of day
       }
-      
+
       if (endDate) {
         end = parseDate(endDate);
         if (!end || isNaN(end.getTime())) {
@@ -711,17 +711,17 @@ router.get('/records', auth, async (req, res) => {
         }
         end.setHours(23, 59, 59, 999); // End of day
       }
-      
+
       // Validate: end date cannot be in the future
       const today = getISTEndOfDay();
-      
+
       if (end && end > today) {
         return res.status(400).json({
           success: false,
           message: 'End date cannot be in the future'
         });
       }
-      
+
       // Validate: end date cannot be before start date
       if (start && end && end < start) {
         return res.status(400).json({
@@ -729,7 +729,7 @@ router.get('/records', auth, async (req, res) => {
           message: 'End date cannot be before start date'
         });
       }
-      
+
       // Apply filters
       if (start) {
         filter.date.$gte = start;
@@ -753,14 +753,14 @@ router.get('/records', auth, async (req, res) => {
           department: req.user.department,
           isActive: true
         }).select('_id');
-        
+
         if (!teamMember) {
           return res.status(403).json({
             success: false,
             message: 'You can only view attendance for your team members'
           });
         }
-        
+
         filter.userId = userId;
       } else {
         // Regular employees can only see their own attendance
@@ -783,7 +783,7 @@ router.get('/records', auth, async (req, res) => {
           department: req.user.department,
           isActive: true
         }).select('_id');
-        
+
         filter.userId = { $in: teamMembers.map(user => user._id) };
       } else {
         // Regular employees can only see their own
@@ -821,20 +821,20 @@ router.get('/records', auth, async (req, res) => {
 
     // Fill in missing dates with "absent" status (excluding Sundays)
     let completeRecords = [...processedRecords];
-    
+
     if (startDate && endDate) {
       const start = parseDate(startDate);
       const end = parseDate(endDate);
-      
+
       if (start && end) {
         // Generate all dates in range
         const allDates = [];
         const currentDate = new Date(start);
-        
+
         while (currentDate <= end) {
           const dateStr = currentDate.toISOString().split('T')[0];
           const dayOfWeek = currentDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
-          
+
           // Skip Sundays (0)
           if (dayOfWeek !== 0) {
             allDates.push({
@@ -842,17 +842,17 @@ router.get('/records', auth, async (req, res) => {
               date: new Date(currentDate)
             });
           }
-          
+
           currentDate.setDate(currentDate.getDate() + 1);
         }
-        
+
         // Create a map of existing records by date
         const recordMap = new Map();
         processedRecords.forEach(record => {
           const recordDateStr = new Date(record.date).toISOString().split('T')[0];
           recordMap.set(recordDateStr, record);
         });
-        
+
         // Build complete records array with absent entries for missing dates
         completeRecords = allDates.map(({ dateStr, date }) => {
           if (recordMap.has(dateStr)) {
@@ -994,7 +994,7 @@ router.get('/export-excel', auth, async (req, res) => {
         department: req.user.department,
         isActive: true
       }).select('_id');
-      
+
       if (!teamMember) {
         return res.status(403).json({
           success: false,
@@ -1024,15 +1024,15 @@ router.get('/export-excel', auth, async (req, res) => {
     // Generate all dates in range (excluding Sundays)
     const allDates = [];
     const currentDate = new Date(start);
-    
+
     while (currentDate <= end) {
       const dayOfWeek = currentDate.getDay(); // 0 = Sunday
-      
+
       // Skip Sundays
       if (dayOfWeek !== 0) {
         allDates.push(new Date(currentDate));
       }
-      
+
       currentDate.setDate(currentDate.getDate() + 1);
     }
 
@@ -1057,7 +1057,6 @@ router.get('/export-excel', auth, async (req, res) => {
       const record = recordMap.get(dateStr);
 
       if (record) {
-        // Calculate check-in and check-out times
         let checkInTime = null;
         let checkOutTime = null;
         let lateMinutes = 0;
@@ -1082,11 +1081,8 @@ router.get('/export-excel', auth, async (req, res) => {
         totalLateMinutes += lateMinutes;
         totalEarlyMinutes += earlyMinutes;
 
-        if (record.workLocation === WORK_LOCATION.HOME) {
-          totalWFHDays++;
-        } else if (record.workLocation === WORK_LOCATION.OFFICE) {
-          totalOfficeDays++;
-        }
+        if (record.workLocation === WORK_LOCATION.HOME) totalWFHDays++;
+        else if (record.workLocation === WORK_LOCATION.OFFICE) totalOfficeDays++;
 
         if (record.status === ATTENDANCE_STATUS.PRESENT || record.status === ATTENDANCE_STATUS.PARTIAL) {
           totalPresentDays++;
@@ -1104,7 +1100,6 @@ router.get('/export-excel', auth, async (req, res) => {
           effectiveHours: record.workSummary?.effectiveHours || 0
         });
       } else {
-        // Absent day
         totalAbsentDays++;
         completeData.push({
           date: date,
@@ -1119,6 +1114,27 @@ router.get('/export-excel', auth, async (req, res) => {
         });
       }
     });
+
+    // IST Conversion Functions
+    const formatDateIST = (date) => {
+      if (!date) return '-';
+      return date.toLocaleDateString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      });
+    };
+
+    const formatTimeIST = (date) => {
+      if (!date) return '-';
+      return date.toLocaleTimeString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      });
+    };
 
     // Create Excel workbook
     const workbook = new ExcelJS.Workbook();
@@ -1140,14 +1156,13 @@ router.get('/export-excel', auth, async (req, res) => {
     worksheet.mergeCells('A1:H1');
     const titleRow = worksheet.getCell('A1');
     titleRow.value = 'ATTENDANCE REPORT';
-    titleRow.font = { size: 16, bold: true };
+    titleRow.font = { size: 16, bold: true, color: { argb: 'FFFFFFFF' } };
     titleRow.alignment = { horizontal: 'center', vertical: 'middle' };
     titleRow.fill = {
       type: 'pattern',
       pattern: 'solid',
       fgColor: { argb: 'FF4472C4' }
     };
-    titleRow.font = { ...titleRow.font, color: { argb: 'FFFFFFFF' } };
     worksheet.getRow(1).height = 30;
 
     // Add employee info
@@ -1167,8 +1182,8 @@ router.get('/export-excel', auth, async (req, res) => {
     const headerRow = worksheet.getRow(5);
     headerRow.values = [
       'Date',
-      'Check In',
-      'Check Out',
+      'Check In (IST)',
+      'Check Out (IST)',
       'Total Hours',
       'Late (min)',
       'Early (min)',
@@ -1188,20 +1203,11 @@ router.get('/export-excel', auth, async (req, res) => {
     let rowIndex = 6;
     completeData.forEach(data => {
       const row = worksheet.getRow(rowIndex);
-      
-      // Format date as DD/MM/YYYY
-      const dateStr = `${String(data.date.getDate()).padStart(2, '0')}/${String(data.date.getMonth() + 1).padStart(2, '0')}/${data.date.getFullYear()}`;
-      
-      // Format time as HH:MM
-      const formatTime = (date) => {
-        if (!date) return '-';
-        return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-      };
 
       row.values = [
-        dateStr,
-        formatTime(data.checkIn),
-        formatTime(data.checkOut),
+        formatDateIST(data.date),
+        formatTimeIST(data.checkIn),
+        formatTimeIST(data.checkOut),
         data.totalHours > 0 ? data.totalHours.toFixed(2) : '-',
         data.lateMinutes > 0 ? data.lateMinutes : '-',
         data.earlyMinutes > 0 ? data.earlyMinutes : '-',
@@ -1209,7 +1215,7 @@ router.get('/export-excel', auth, async (req, res) => {
         data.workLocation ? data.workLocation.toUpperCase() : 'ABSENT'
       ];
 
-      // Color code based on status
+      // Color coding
       if (data.status === 'absent') {
         row.fill = {
           type: 'pattern',
@@ -1230,23 +1236,19 @@ router.get('/export-excel', auth, async (req, res) => {
 
     // Add summary section
     rowIndex += 1;
-    const summaryStartRow = rowIndex;
-
     worksheet.mergeCells(`A${rowIndex}:H${rowIndex}`);
     const summaryTitleCell = worksheet.getCell(`A${rowIndex}`);
     summaryTitleCell.value = 'SUMMARY';
-    summaryTitleCell.font = { size: 14, bold: true };
+    summaryTitleCell.font = { size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
     summaryTitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
     summaryTitleCell.fill = {
       type: 'pattern',
       pattern: 'solid',
       fgColor: { argb: 'FF4472C4' }
     };
-    summaryTitleCell.font = { ...summaryTitleCell.font, color: { argb: 'FFFFFFFF' } };
     worksheet.getRow(rowIndex).height = 25;
     rowIndex++;
 
-    // Summary data
     const summaryData = [
       ['Total Working Days:', allDates.length],
       ['Total Present Days:', totalPresentDays],
@@ -1277,7 +1279,7 @@ router.get('/export-excel', auth, async (req, res) => {
       rowIndex++;
     });
 
-    // Add borders to all cells
+    // Add borders
     worksheet.eachRow((row, rowNumber) => {
       if (rowNumber >= 5) {
         row.eachCell((cell) => {
@@ -1294,17 +1296,10 @@ router.get('/export-excel', auth, async (req, res) => {
     // Generate filename
     const fileName = `Attendance_${user.firstName}_${user.lastName}_${startDate.replace(/\//g, '-')}_to_${endDate.replace(/\//g, '-')}.xlsx`;
 
-    // Set response headers
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    );
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${fileName}"`
-    );
+    // Send response
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
 
-    // Write to response
     await workbook.xlsx.write(res);
     res.end();
 

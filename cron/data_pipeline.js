@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { callRefreshToken } = require('../datapipeline');
+const { callRefreshToken, callRefreshToken2 } = require('../datapipeline');
 
 class DataPipeline {
   constructor() {
@@ -42,6 +42,7 @@ class DataPipeline {
   async runPipeline() {
     try {
       await callRefreshToken();
+      await callRefreshToken2();
       console.log('DataPipeline job executed successfully.');
     } catch (error) {
       console.error('DataPipeline job failed:', error.message);
