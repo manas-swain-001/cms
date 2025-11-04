@@ -4,7 +4,7 @@ const { callRefreshToken } = require('../datapipeline');
 class DataPipeline {
   constructor() {
     this.jobs = [];
-    this.isTestMode = true; // change to true for testing (runs every 20 seconds)
+    this.isTestMode = false; // change to true for testing (runs every 20 seconds)
   }
 
   /**
