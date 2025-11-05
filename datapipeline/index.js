@@ -133,7 +133,7 @@ const callRefreshToken = async () => {
 const callRefreshToken2 = async () => {
   try {
     const folderPath = path.join(__dirname, 'data');
-    const filePath = path.join(folderPath, 'accessToken.txt');
+    const filePath = path.join(folderPath, 'accessToken2.txt');
 
     // Ensure folder exists
     if (!fs.existsSync(folderPath)) {
