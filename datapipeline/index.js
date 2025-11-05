@@ -42,6 +42,8 @@ const callRefreshToken = async () => {
 
     const data = await response.json();
     token = data?.token || token; // update token if API returns one
+    console.log('token is 1 :::', token);
+    console.log('token is 2 :::', data?.token);
     fs.writeFileSync(filePath, token);
     console.log('Token file updated:', filePath);
 
