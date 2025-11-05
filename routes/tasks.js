@@ -6,10 +6,7 @@ const { User } = require('../models/User');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
 const { USER_ROLES } = require('../constant/enum');
 const {
-  getCurrentISTTime,
-  getISTStartOfDay,
   getTodayIST,
-  parseDateDDMMYYYY,
   getCurrentISTHourMinute
 } = require('../utils/dateUtils');
 
@@ -178,7 +175,6 @@ router.post('/submit-update', [
     }
 
     // Auto-determine which scheduled entry to update based on current time
-    const currentTime = getCurrentISTTime();
     const { hour: currentHour, minute: currentMinute } = getCurrentISTHourMinute();
     const currentTimeString = `${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')}`;
 
@@ -253,7 +249,7 @@ router.post('/submit-update', [
     // Submit the update
     targetEntry.status = 'submitted';
     targetEntry.description = description.trim();
-    targetEntry.submittedAt = getCurrentISTTime();
+    targetEntry.submittedAt = new Date();
 
     await task.save();
 
@@ -265,7 +261,7 @@ router.post('/submit-update', [
         submittedEntry: {
           scheduledTime: targetScheduledTime,
           description: description.trim(),
-          submittedAt: getCurrentISTTime(),
+          submittedAt: new Date(),
           currentTime: currentTimeString
         }
       }

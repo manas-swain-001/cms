@@ -195,7 +195,7 @@ router.post('/punch-in', [
     // Check if user is late (office hours: 9:00 AM to 5:30 PM IST)
     const now = getCurrentISTTime();
     const standardStartTime = getISTStartOfDay();
-    standardStartTime.setHours(9, 0, 0, 0); // 9:00 AM IST
+    standardStartTime.setHours(9, 15, 0, 0); // 9:15 AM IST
 
     if (now > standardStartTime) {
       newSession.checkIn.isLate = true;
@@ -1308,6 +1308,104 @@ router.get('/export-excel', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error while exporting attendance records'
+    });
+  }
+});
+
+router.get('/history-details', auth, async (req, res) => {
+  try {
+    // 1️⃣ Get all users except admins
+    const users = await User.find({ role: { $ne: 'admin' } })
+      .select('_id firstName lastName role isLocked');
+
+    if (!users || users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No users found (excluding admins)'
+      });
+    }
+
+    // 2️⃣ Define today's start and end (IST-based)
+    const now = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000; // 5h 30m in ms
+    const istNow = new Date(now.getTime() + istOffset);
+
+    const istStart = new Date(istNow);
+    istStart.setHours(0, 0, 0, 0);
+    const istEnd = new Date(istNow);
+    istEnd.setHours(23, 59, 59, 999);
+
+    const startOfDay = new Date(istStart.getTime() - istOffset);
+    const endOfDay = new Date(istEnd.getTime() - istOffset);
+
+    // 3️⃣ Fetch today's attendance
+    const todayRecords = await Attendance.find({
+      createdAt: { $gte: startOfDay, $lte: endOfDay }
+    }).lean();
+
+    // 4️⃣ Create a map for quick lookup
+    const attendanceMap = new Map();
+    todayRecords.forEach(record => {
+      attendanceMap.set(record.userId.toString(), record);
+    });
+
+    // 5️⃣ Build final response array
+    const userStatusList = users.map(user => {
+      const userId = user._id.toString();
+      const attendance = attendanceMap.get(userId);
+
+      let status = 'absent';
+      let lateMinute;
+      let checkInAt;
+
+      if (attendance) {
+        status = 'present';
+
+        // Get lateMinutes and check-in time from first session if available
+        if (attendance.sessions && attendance.sessions.length > 0) {
+          const firstSession = attendance.sessions[0];
+          if (firstSession?.checkIn?.lateMinutes !== undefined) {
+            lateMinute = firstSession.checkIn.lateMinutes;
+          }
+          if (firstSession?.checkIn?.time !== undefined) {
+            checkInAt = firstSession.checkIn.time;
+          }
+        }
+      }
+
+      return {
+        _id: user._id,
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        fullName: `${user.firstName} ${user.lastName}`,
+        role: user.role,
+        isLocked: user.isLocked || false,
+        status,
+        ...(status === 'present' && lateMinute !== undefined ? { lateMinute } : {}),
+        ...(status === 'present' && checkInAt !== undefined ? { checkInAt } : {}),
+      };
+    });
+
+    // 6️⃣ Sort: all present first, then absent
+    userStatusList.sort((a, b) => {
+      if (a.status === b.status) return 0;
+      return a.status === 'present' ? -1 : 1;
+    });
+
+    // 7️⃣ Send response
+    return res.status(200).json({
+      success: true,
+      date: new Date().toISOString().split('T')[0],
+      data: userStatusList
+    });
+
+  } catch (error) {
+    console.error('Error fetching history details:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
     });
   }
 });
