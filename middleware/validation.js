@@ -49,7 +49,7 @@ const isValidTaskStatus = (value) => {
 const validateRegister = [
   body('email')
     .isEmail()
-    .normalizeEmail()
+    // .normalizeEmail()
     .withMessage('Please provide a valid email'),
   body('password')
     .isLength({ min: 8 })
@@ -88,7 +88,7 @@ const validateRegister = [
 const validateLogin = [
   body('email')
     .isEmail()
-    .normalizeEmail()
+    // .normalizeEmail()
     .withMessage('Please provide a valid email'),
   body('password')
     .notEmpty()
@@ -103,7 +103,7 @@ const validateLogin = [
 const validatePasswordReset = [
   body('email')
     .isEmail()
-    .normalizeEmail()
+    // .normalizeEmail()
     .withMessage('Please provide a valid email'),
   handleValidationErrors
 ];
@@ -142,7 +142,7 @@ const validateUserUpdate = [
   body('email')
     .optional()
     .isEmail()
-    .normalizeEmail()
+    // .normalizeEmail()
     .withMessage('Please provide a valid email'),
   body('role')
     .optional()

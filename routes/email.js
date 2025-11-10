@@ -12,7 +12,7 @@ router.post('/send', [
     auth,
     body('to')
         .isEmail()
-        .normalizeEmail()
+        // .normalizeEmail()
         .withMessage('Please provide a valid email address'),
     body('name')
         .trim()
@@ -77,7 +77,7 @@ router.post('/send-welcome', [
     auth,
     body('email')
         .isEmail()
-        .normalizeEmail()
+        // .normalizeEmail()
         .withMessage('Please provide a valid email'),
     body('password')
         .trim()

@@ -23,7 +23,7 @@ router.post('/save', [
     .withMessage('Last name must be between 2 and 50 characters'),
   body('email')
     .isEmail()
-    .normalizeEmail()
+    // .normalizeEmail()
     .withMessage('Please provide a valid email'),
   body('password')
     .isLength({ min: 6 })

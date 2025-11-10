@@ -24,7 +24,7 @@ router.post('/register', [
     .withMessage('Last name must be between 2 and 50 characters'),
   body('email')
     .isEmail()
-    .normalizeEmail()
+    // .normalizeEmail()
     .withMessage('Please provide a valid email'),
   body('password')
     .isLength({ min: 6 })
@@ -130,7 +130,6 @@ router.post('/register', [
 router.post('/login', [
   body('email')
     .isEmail()
-    .normalizeEmail()
     .withMessage('Please provide a valid email'),
   body('password')
     .notEmpty()
@@ -149,6 +148,10 @@ router.post('/login', [
 
     const { email, password, office, rememberMe } = req.body;
 
+    console.log('email ::: ', email)
+    console.log('password ::: ', password)
+    console.log('comming here')
+
     // Find user and include password for comparison
     const user = await User.findByCredentials(email, password);
 
@@ -163,7 +166,7 @@ router.post('/login', [
     const refreshToken = user.generateRefreshToken();
 
     // Save refresh token
-    const refreshTokenExpiry = rememberMe ? 
+    const refreshTokenExpiry = rememberMe ?
       new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : // 30 days
       new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);   // 7 days
 
@@ -197,9 +200,9 @@ router.post('/login', [
     });
   } catch (error) {
     console.error('Login error:', error);
-    
-    if (error.message === 'Invalid credentials' || 
-        error.message.includes('locked')) {
+
+    if (error.message === 'Invalid credentials' ||
+      error.message.includes('locked')) {
       return res.status(401).json({
         success: false,
         message: error.message
@@ -220,7 +223,7 @@ router.post('/login', [
 router.post('/biometric-login', upload.single('biometricImage'), async (req, res) => {
   try {
     const { office } = req.body;
-    
+
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -230,9 +233,9 @@ router.post('/biometric-login', upload.single('biometricImage'), async (req, res
 
     // TODO: Implement actual biometric matching logic
     // For now, simulate biometric authentication
-    
+
     // Find a user with biometric enrollment (mock)
-    const user = await User.findOne({ 
+    const user = await User.findOne({
       'biometricData.isEnrolled': true,
       isActive: true
     });
@@ -306,7 +309,7 @@ router.post('/refresh-token', async (req, res) => {
 
     // Verify refresh token
     const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
-    
+
     // Find user and check if refresh token exists
     const user = await User.findById(decoded.id);
     if (!user || !user.isActive) {
@@ -457,10 +460,10 @@ router.put('/change-password', [
 
     // Update password
     user.password = newPassword;
-    
+
     // Clear all refresh tokens (force re-login on all devices)
     user.refreshTokens = [];
-    
+
     await user.save();
 
     res.json({
@@ -482,7 +485,7 @@ router.put('/change-password', [
 router.post('/forgot-password', [
   body('email')
     .isEmail()
-    .normalizeEmail()
+    // .normalizeEmail()
     .withMessage('Please provide a valid email')
 ], async (req, res) => {
   try {
@@ -519,7 +522,7 @@ router.post('/forgot-password', [
 
     // TODO: Send email with reset link
     // For now, just return success (in production, send actual email)
-    
+
     res.json({
       success: true,
       message: 'Password reset link has been sent to your email',
@@ -562,7 +565,7 @@ router.post('/reset-password', [
 
     // Verify reset token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
+
     const user = await User.findOne({
       _id: decoded.id,
       passwordResetToken: token,
@@ -581,10 +584,10 @@ router.post('/reset-password', [
     user.password = newPassword;
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
-    
+
     // Clear all refresh tokens
     user.refreshTokens = [];
-    
+
     await user.save();
 
     res.json({
@@ -593,7 +596,7 @@ router.post('/reset-password', [
     });
   } catch (error) {
     console.error('Reset password error:', error);
-    
+
     if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
       return res.status(400).json({
         success: false,
