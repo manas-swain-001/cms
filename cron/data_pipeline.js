@@ -42,7 +42,7 @@ class DataPipeline {
   async runPipeline() {
     try {
       await callRefreshToken();
-      await callRefreshToken2();
+      // await callRefreshToken2();
       console.log('DataPipeline job executed successfully.');
     } catch (error) {
       console.error('DataPipeline job failed:', error.message);
