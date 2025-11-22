@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const { body, validationResult, query } = require('express-validator');
+const ExcelJS = require('exceljs');
 const Task = require('../models/Task');
 const { User } = require('../models/User');
 const { auth, authorize, managerAccess, auditLog } = require('../middleware/auth');
@@ -407,6 +408,322 @@ router.get('/history', [
     res.status(500).json({
       success: false,
       message: 'Server error while fetching task history'
+    });
+  }
+});
+
+// @route   GET /api/tasks/export-excel
+// @desc    Export task updates to Excel for a specific user (Admin only)
+// @access  Private (Admin only)
+// @headers user-id, start-date (dd/mm/yyyy), end-date (dd/mm/yyyy)
+router.get('/export-excel', [
+  auth,
+  authorize(USER_ROLES.ADMIN)
+], async (req, res) => {
+  try {
+    // Get parameters from headers
+    const startDate = req.headers['start-date'];
+    const endDate = req.headers['end-date'];
+    const userId = req.headers['user-id'];
+
+    // Validate required parameters
+    if (!startDate || !endDate || !userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'start-date, end-date, and user-id are required in headers'
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user-id format'
+      });
+    }
+
+    // Parse dates
+    const { start, end } = parseISTDateRange(startDate, endDate);
+
+    if (!start || isNaN(start.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid start date format. Use DD/MM/YYYY format'
+      });
+    }
+
+    if (!end || isNaN(end.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid end date format. Use DD/MM/YYYY format'
+      });
+    }
+
+    // Validate date range
+    if (end < start) {
+      return res.status(400).json({
+        success: false,
+        message: 'End date cannot be before start date'
+      });
+    }
+
+    // Verify user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Build date filter
+    const dateFilter = {
+      $gte: start,
+      $lte: end
+    };
+
+    // Query all tasks in date range
+    const tasks = await Task.find({
+      userId: userId,
+      date: dateFilter
+    })
+      .sort({ date: 1 })
+      .lean();
+
+    // Format date helper
+    const formatDateIST = (date) => {
+      if (!date) return '-';
+      const d = new Date(date);
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const year = d.getFullYear();
+      return `${day}/${month}/${year}`;
+    };
+
+    // Format time helper
+    const formatTimeIST = (date) => {
+      if (!date) return '-';
+      const d = new Date(date);
+      const hours = String(d.getHours()).padStart(2, '0');
+      const minutes = String(d.getMinutes()).padStart(2, '0');
+      return `${hours}:${minutes}`;
+    };
+
+    // Format datetime helper
+    const formatDateTimeIST = (date) => {
+      if (!date) return '-';
+      const d = new Date(date);
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const year = d.getFullYear();
+      const hours = String(d.getHours()).padStart(2, '0');
+      const minutes = String(d.getMinutes()).padStart(2, '0');
+      const seconds = String(d.getSeconds()).padStart(2, '0');
+      return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
+    };
+
+    // Prepare data for Excel
+    const excelData = [];
+    tasks.forEach(task => {
+      const taskDate = formatDateIST(task.date);
+      task.scheduledEntries.forEach(entry => {
+        excelData.push({
+          date: taskDate,
+          scheduledTime: entry.scheduledTime,
+          status: entry.status,
+          description: entry.description || 'No update provided',
+          submittedAt: entry.submittedAt ? formatDateTimeIST(entry.submittedAt) : '-'
+        });
+      });
+    });
+
+    // Create workbook
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Task Updates Report');
+
+    // Set column widths
+    worksheet.columns = [
+      { key: 'date', width: 15 },
+      { key: 'scheduledTime', width: 18 },
+      { key: 'status', width: 15 },
+      { key: 'description', width: 50 },
+      { key: 'submittedAt', width: 25 }
+    ];
+
+    // Add title row
+    worksheet.mergeCells('A1:E1');
+    const titleRow = worksheet.getCell('A1');
+    titleRow.value = 'TASK UPDATES REPORT';
+    titleRow.font = { size: 16, bold: true, color: { argb: 'FFFFFFFF' } };
+    titleRow.alignment = { horizontal: 'center', vertical: 'middle' };
+    titleRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    worksheet.getRow(1).height = 30;
+
+    // Add employee info
+    worksheet.mergeCells('A2:B2');
+    worksheet.getCell('A2').value = 'Employee Name:';
+    worksheet.getCell('A2').font = { bold: true };
+    worksheet.mergeCells('C2:E2');
+    worksheet.getCell('C2').value = `${user.firstName} ${user.lastName}`;
+
+    worksheet.mergeCells('A3:B3');
+    worksheet.getCell('A3').value = 'Employee ID:';
+    worksheet.getCell('A3').font = { bold: true };
+    worksheet.mergeCells('C3:E3');
+    worksheet.getCell('C3').value = user.employeeId || '-';
+
+    worksheet.mergeCells('A4:B4');
+    worksheet.getCell('A4').value = 'Period:';
+    worksheet.getCell('A4').font = { bold: true };
+    worksheet.mergeCells('C4:E4');
+    worksheet.getCell('C4').value = `${startDate} to ${endDate}`;
+
+    // Add header row
+    const headerRow = worksheet.getRow(6);
+    headerRow.values = [
+      'Date',
+      'Scheduled Time',
+      'Status',
+      'Description',
+      'Submitted At'
+    ];
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF70AD47' }
+    };
+    headerRow.alignment = { horizontal: 'center', vertical: 'middle' };
+    headerRow.height = 25;
+
+    // Add data rows
+    let rowIndex = 7;
+    excelData.forEach(data => {
+      const row = worksheet.getRow(rowIndex);
+
+      row.values = [
+        data.date,
+        data.scheduledTime,
+        data.status.toUpperCase(),
+        data.description,
+        data.submittedAt
+      ];
+
+      // Color coding based on status
+      if (data.status === 'submitted') {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFC6EFCE' }
+        };
+      } else if (data.status === 'pending') {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFE699' }
+        };
+      } else if (data.status === 'warning_sent') {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFC000' }
+        };
+      } else if (data.status === 'escalated') {
+        row.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFCCCC' }
+        };
+      }
+
+      row.alignment = { horizontal: 'left', vertical: 'middle' };
+      rowIndex++;
+    });
+
+    // Add summary section
+    rowIndex += 1;
+    worksheet.mergeCells(`A${rowIndex}:E${rowIndex}`);
+    const summaryTitleCell = worksheet.getCell(`A${rowIndex}`);
+    summaryTitleCell.value = 'SUMMARY';
+    summaryTitleCell.font = { size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
+    summaryTitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    summaryTitleCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    worksheet.getRow(rowIndex).height = 25;
+    rowIndex++;
+
+    // Calculate summary
+    const totalEntries = excelData.length;
+    const submittedEntries = excelData.filter(e => e.status === 'submitted').length;
+    const pendingEntries = excelData.filter(e => e.status === 'pending').length;
+    const warningEntries = excelData.filter(e => e.status === 'warning_sent').length;
+    const escalatedEntries = excelData.filter(e => e.status === 'escalated').length;
+    const uniqueDates = [...new Set(excelData.map(e => e.date))].length;
+
+    const summaryData = [
+      ['Total Days:', uniqueDates],
+      ['Total Entries:', totalEntries],
+      ['Submitted:', submittedEntries],
+      ['Pending:', pendingEntries],
+      ['Warning Sent:', warningEntries],
+      ['Escalated:', escalatedEntries]
+    ];
+
+    summaryData.forEach(([label, value]) => {
+      worksheet.mergeCells(`A${rowIndex}:C${rowIndex}`);
+      const labelCell = worksheet.getCell(`A${rowIndex}`);
+      labelCell.value = label;
+      labelCell.font = { bold: true };
+      labelCell.alignment = { horizontal: 'left', vertical: 'middle' };
+
+      worksheet.mergeCells(`D${rowIndex}:E${rowIndex}`);
+      const valueCell = worksheet.getCell(`D${rowIndex}`);
+      valueCell.value = value;
+      valueCell.alignment = { horizontal: 'center', vertical: 'middle' };
+      valueCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE7E6E6' }
+      };
+
+      rowIndex++;
+    });
+
+    // Add borders
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber >= 6) {
+        row.eachCell((cell) => {
+          cell.border = {
+            top: { style: 'thin' },
+            left: { style: 'thin' },
+            bottom: { style: 'thin' },
+            right: { style: 'thin' }
+          };
+        });
+      }
+    });
+
+    // Generate filename
+    const fileName = `Task_Updates_${user.firstName}_${user.lastName}_${startDate.replace(/\//g, '-')}_to_${endDate.replace(/\//g, '-')}.xlsx`;
+
+    // Send response
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (error) {
+    console.error('Export Excel error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while exporting task updates'
     });
   }
 });
