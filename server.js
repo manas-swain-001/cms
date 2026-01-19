@@ -10,6 +10,7 @@ require('dotenv').config();
 
 // Database connection
 const connectDB = require('./config/database');
+const { connectRedis } = require('./config/redis');
 const SocketHandler = require('./websocket/socketHandler');
 
 const app = express();
@@ -44,9 +45,6 @@ const smsCronJob = require('./cron/smsCron');
 // Initialize Task Update Monitoring Cron Jobs
 const taskUpdateCron = require('./cron/taskUpdateCron');
 taskUpdateCron.start();
-
-const dataPipelineCron = require('./cron/data_pipeline');
-dataPipelineCron.start();
 
 // Initialize Task Update Notification Cron Jobs
 const TaskNotificationCron = require('./cron/taskNotificationCron');
@@ -253,25 +251,37 @@ process.on('SIGINT', () => {
   });
 });
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🗄️  Database: ${process.env.MONGODB_URI ? 'MongoDB Atlas' : 'Not configured'}`);
-  console.log(`🔌 WebSocket: Enabled`);
-  console.log(`🌐 CORS: ${process.env.FRONTEND_URL || 'http://localhost:4028'}`);
-  
-  if (process.env.NODE_ENV !== 'production') {
-    console.log(`\n📋 Available endpoints:`);
-    console.log(`   Health: http://localhost:${PORT}/health`);
-    console.log(`   Auth: http://localhost:${PORT}/api/auth`);
-    console.log(`   Users: http://localhost:${PORT}/api/users`);
-    console.log(`   Attendance: http://localhost:${PORT}/api/attendance`);
-    console.log(`   Tasks: http://localhost:${PORT}/api/tasks`);
-    console.log(`   Dashboard: http://localhost:${PORT}/api/dashboard`);
-    console.log(`   Email: http://localhost:${PORT}/api/email`);
-    console.log(`   WebSocket: ws://localhost:${PORT}`);
-  }
-});
+// Connect to Redis and start server
+connectRedis()
+  .then(() => {
+    // Start server after Redis connection
+    server.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🗄️  Database: ${process.env.MONGODB_URI ? 'MongoDB Atlas' : 'Not configured'}`);
+      console.log(`🔌 WebSocket: Enabled`);
+      console.log(`🌐 CORS: ${process.env.FRONTEND_URL || 'http://localhost:4028'}`);
+      
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`\n📋 Available endpoints:`);
+        console.log(`   Health: http://localhost:${PORT}/health`);
+        console.log(`   Auth: http://localhost:${PORT}/api/auth`);
+        console.log(`   Users: http://localhost:${PORT}/api/users`);
+        console.log(`   Attendance: http://localhost:${PORT}/api/attendance`);
+        console.log(`   Tasks: http://localhost:${PORT}/api/tasks`);
+        console.log(`   Dashboard: http://localhost:${PORT}/api/dashboard`);
+        console.log(`   Email: http://localhost:${PORT}/api/email`);
+        console.log(`   WebSocket: ws://localhost:${PORT}`);
+      }
+    });
+  })
+  .catch(err => {
+    console.error('Failed to connect to Redis:', err);
+    console.log('Starting server anyway (some features may not work)...');
+    // Start server even if Redis fails
+    server.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT} (Redis not connected)`);
+    });
+  });
 
 module.exports = app;
